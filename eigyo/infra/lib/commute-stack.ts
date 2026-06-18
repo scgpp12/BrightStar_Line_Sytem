@@ -5,6 +5,7 @@ import * as dynamodb from "aws-cdk-lib/aws-dynamodb";
 import * as lambda from "aws-cdk-lib/aws-lambda";
 import * as logs from "aws-cdk-lib/aws-logs";
 import * as iam from "aws-cdk-lib/aws-iam";
+import * as s3 from "aws-cdk-lib/aws-s3";
 
 /**
  * 要員通勤コストツールの最小構成:
@@ -30,6 +31,16 @@ export class CommuteStack extends cdk.Stack {
       billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
       timeToLiveAttribute: "ttl",
       removalPolicy: cdk.RemovalPolicy.DESTROY,
+    });
+
+    // --- S3: 要員リスト CSV のエクスポート置き場（LINE 営業助手の DL/UP 用） ---
+    const dataBucket = new s3.Bucket(this, "StaffDataBucket", {
+      blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
+      encryption: s3.BucketEncryption.S3_MANAGED,
+      enforceSSL: true,
+      removalPolicy: cdk.RemovalPolicy.DESTROY,
+      autoDeleteObjects: true,
+      lifecycleRules: [{ prefix: "exports/", expiration: cdk.Duration.days(3) }],
     });
 
     // --- 依存レイヤ（requests / beautifulsoup4。infra/build.py で作成済み） ---
@@ -114,11 +125,14 @@ export class CommuteStack extends cdk.Stack {
         // 全社花名册 / 日次認証（人事スタック所有・名前参照）。営業部のみ利用可。
         ROSTER_TABLE: "brightstar-hr-dev-roster",
         AUTH_TABLE: "brightstar-hr-dev-auth",
+        // 要員リスト CSV の DL/UP 用バケット
+        STAFF_BUCKET: dataBucket.bucketName,
       },
     });
 
     staffTable.grantReadWriteData(lineFn);
     cacheTable.grantReadWriteData(lineFn);
+    dataBucket.grantReadWrite(lineFn);
     lineFn.addToRolePolicy(bedrockPolicy);
 
     // 跨栈：花名册(読 + lineUserId 紐付け) + 认证表(読写)
