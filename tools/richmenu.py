@@ -73,19 +73,37 @@ def _draw_center(d, box, text, fill, sz):
         cy += h + 12
 
 
+ROWH = 220          # 1 行の高さ（コンパクト）
+PAD_X, PAD_Y = 64, 30
+BTN_FONT = 44
+
+
+def _measure(d, text, f):
+    lines = text.split("\n")
+    w = max(d.textbbox((0, 0), ln, font=f)[2] - d.textbbox((0, 0), ln, font=f)[0] for ln in lines)
+    h = sum((d.textbbox((0, 0), ln, font=f)[3] - d.textbbox((0, 0), ln, font=f)[1]) + 10 for ln in lines)
+    return w, h
+
+
 def build(cfg):
-    rows, cols, H = cfg["rows"], cfg["cols"], cfg["h"]
+    """ボタンは文字サイズ＋余白の「ピル」だけ塗る（タップ領域はセル全体）。全体も低め。"""
+    rows, cols = cfg["rows"], cfg["cols"]
+    H = max(260, rows * ROWH)
     img = Image.new("RGB", (W, H), NAVY)
     d = ImageDraw.Draw(img)
     cw, ch = W // cols, H // rows
-    gap = 14
+    f = _font(BTN_FONT)
     areas = []
     for i, (label, text, color) in enumerate(cfg["btns"]):
         r, c = divmod(i, cols)
         x, y = c * cw, r * ch
-        d.rounded_rectangle([x + gap, y + gap, x + cw - gap, y + ch - gap], radius=28, fill=color)
-        sz = 86 if (rows == 1 and cols <= 2) else 64
-        _draw_center(d, (x + gap, y + gap, x + cw - gap, y + ch - gap), label, WHITE, sz)
+        cx, cy = x + cw / 2, y + ch / 2
+        tw, th = _measure(d, label, f)
+        pw = min(cw - 36, tw + 2 * PAD_X)          # 文字幅＋余白（セル幅で頭打ち）
+        ph = min(ch - 30, th + 2 * PAD_Y)
+        box = (cx - pw / 2, cy - ph / 2, cx + pw / 2, cy + ph / 2)
+        d.rounded_rectangle(box, radius=ph / 2, fill=color)   # ピル（両端まる）
+        _draw_center(d, box, label, WHITE, BTN_FONT)
         areas.append({
             "bounds": {"x": x, "y": y, "width": cw, "height": ch},
             "action": {"type": "message", "text": text},
