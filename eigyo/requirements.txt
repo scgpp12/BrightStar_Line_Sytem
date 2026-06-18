@@ -1,0 +1,5 @@
+# 通勤コスト調査 原型の依存（最小構成）
+# データはサーバサイドレンダリングの HTML に含まれるため requests + bs4 で足りる。
+# playwright は不要（実地検証済み。詳細は README「playwright を使わない理由」）。
+requests>=2.31
+beautifulsoup4>=4.12

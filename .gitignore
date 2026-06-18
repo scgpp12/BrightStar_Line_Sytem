@@ -1,0 +1,22 @@
+# 依赖 / 构建产物
+**/node_modules/
+**/cdk.out/
+**/__pycache__/
+*.pyc
+**/.venv/
+**/.pytest_cache/
+eigyo/infra/build/
+
+# CDK 本地状态 / 输出（可能含 lookup 缓存或栈输出）
+**/cdk.context.json
+**/outputs.json
+
+# 本地数据 / 临时
+*.db
+*.log
+.DS_Store
+
+# 机密绝不入库（全部走 SSM SecureString / 部署时 context 注入）
+*.env
+.aws/
+secrets.*

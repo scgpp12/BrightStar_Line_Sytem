@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+
+# ローカルDB / 取得キャッシュ（実データを含み得るため除外）
+.cache/
+*.db
+
+# Node / CDK 生成物
+infra/node_modules/
+infra/cdk.out/
+infra/build/
+
+# OS / エディタ
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# 認証情報（万一にも混入させない）
+.env
+*.pem
+credentials
+aws_credentials

@@ -1,0 +1,8 @@
+# 花名册サンプル（staff_sync.py で要員DBへ反映）
+# nearest_station か address のどちらか必須。address は最寄駅に変換して保存（住所は保存しない）。
+staff_id,name,nearest_station,address,department,status
+E002,拉拉,池袋,,営業部,available
+E003,山田太郎,横浜,,営業部,available
+E004,佐藤花子,大宮(埼玉),,営業部,assigned
+E005,鈴木一郎,立川,,営業部,available
+E011,高橋健,,東京都新宿区西新宿2-8-1,営業部,available

@@ -1,0 +1,19 @@
+{
+  "app": "python app.py",
+  "watch": {
+    "include": ["**"],
+    "exclude": ["README.md", "cdk*.json", "**/__pycache__", "**/*.pyc"]
+  },
+  "context": {
+    "appName": "brightstar-kenshu",
+    "stage": "dev",
+    "bedrockEnabled": "false",
+    "bedrockChatModelId": "jp.anthropic.claude-haiku-4-5-20251001-v1:0",
+    "bedrockEmbedModelId": "amazon.titan-embed-text-v2:0",
+    "bedrockEmbedDim": "256",
+    "loginCodeTtlDays": "7",
+    "cancelDeadlineHours": "2",
+    "@aws-cdk/core:newStyleStackSynthesis": true,
+    "@aws-cdk/aws-lambda:recognizeLayerVersion": true
+  }
+}

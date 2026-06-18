@@ -1,0 +1,415 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  BrightStar (ブライトスター) 培训助手 v2.0（微信 agent 版）
+  微信 Webhook → API Gateway(HTTP API) → Lambda(路由+业务+Bedrock意图) → DynamoDB
+  Region: ap-northeast-1 (Tokyo). 时间存 UTC，展示转 JST。
+
+Parameters:
+  AppName:
+    Type: String
+    Default: brightstar
+  Stage:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, staging, prod]
+  CancelDeadlineHours:
+    Type: Number
+    Default: 2
+    Description: 退课截止（开课前 N 小时）
+  WeComCorpId:
+    Type: String
+    Default: ""
+    Description: 企业微信 CorpID（企业ID）。
+  WeComToken:
+    Type: String
+    Default: ""
+    Description: 企业微信自建应用「接收消息」的 Token（验签用）。
+    NoEcho: true
+  WeComAesKey:
+    Type: String
+    Default: ""
+    Description: 企业微信 EncodingAESKey（43 位，消息加解密用）。
+    NoEcho: true
+  WeComAgentId:
+    Type: String
+    Default: ""
+    Description: 企业微信自建应用 AgentId。
+  WeComSecret:
+    Type: String
+    Default: ""
+    Description: 企业微信应用 Secret（微信客服调 API 用）。
+    NoEcho: true
+  WeComRelayUrl:
+    Type: String
+    Default: ""
+    Description: 中转服务器地址（其 IP 在企业可信IP内），如 http://47.85.165.247:5005 或 https://xxx.ts.net
+  WeComRelayAuth:
+    Type: String
+    Default: ""
+    Description: 中转共享密钥（X-Relay-Auth）；中转公网暴露时防滥用。留空则不校验。
+    NoEcho: true
+  WeComKfOpenKfId:
+    Type: String
+    Default: ""
+    Description: 微信客服账号 open_kfid（开课提醒主动推送用）。
+  TeacherSignupCode:
+    Type: String
+    Default: ""
+    Description: 老师自助认证口令（学员发「老师认证 <口令>」升级为老师）。
+    NoEcho: true
+  LineChannelSecret:
+    Type: String
+    Default: ""
+    Description: LINE Messaging API 的 Channel secret（webhook 验签用）。
+    NoEcho: true
+  LineChannelAccessToken:
+    Type: String
+    Default: ""
+    Description: LINE Messaging API 的 Channel access token（回复/推送用，long-lived）。
+    NoEcho: true
+  TeacherOpenids:
+    Type: String
+    Default: ""
+    Description: 老师 userid 白名单（逗号分隔，企业微信成员 UserId）。也可在 Students 表把 role 设为 teacher。
+  BedrockEnabled:
+    Type: String
+    Default: "true"
+    AllowedValues: ["true", "false"]
+    Description: 是否启用 Bedrock 意图解析；false 时退化为关键词解析（无需 Bedrock 权限也能跑）。
+  BedrockModelId:
+    Type: String
+    Default: "anthropic.claude-3-haiku-20240307-v1:0"
+    Description: 东京区可用的 Bedrock 意图解析模型 ID。
+  BedrockChatModelId:
+    Type: String
+    Default: "jp.anthropic.claude-haiku-4-5-20251001-v1:0"
+    Description: RAG 答疑生成模型（日本境内 inference profile，数据不出日本）。质量更高可换 sonnet-4-5。
+  BedrockEmbedModelId:
+    Type: String
+    Default: "amazon.titan-embed-text-v2:0"
+    Description: RAG 向量化模型（Titan Embeddings v2）。
+  BedrockEmbedDim:
+    Type: String
+    Default: "256"
+    Description: 向量维度（Titan v2 支持 256/512/1024；小语料 256 足够且省空间）。
+
+Globals:
+  Function:
+    Runtime: python3.12
+    Timeout: 20
+    MemorySize: 1024            # 提速：CPU 随内存线性增长，加快加解密/网络/冷启动
+    Architectures: [arm64]
+    Tags:
+      Project: !Ref AppName
+      ManagedBy: sam
+      Stage: !Ref Stage
+    Environment:
+      Variables:
+        APP_NAME: !Ref AppName
+        STAGE: !Ref Stage
+        TZ: Asia/Tokyo
+        STUDENTS_TABLE: !Ref StudentsTable
+        COURSES_TABLE: !Ref CoursesTable
+        ENROLLMENTS_TABLE: !Ref EnrollmentsTable
+        GROUPS_TABLE: !Ref GroupsTable
+        RESULTS_TABLE: !Ref ResultsTable
+        ENROLLMENTS_GSI1: GSI1
+        CANCEL_DEADLINE_HOURS: !Ref CancelDeadlineHours
+        WECOM_CORP_ID: !Ref WeComCorpId
+        WECOM_TOKEN: !Ref WeComToken
+        WECOM_AES_KEY: !Ref WeComAesKey
+        WECOM_AGENT_ID: !Ref WeComAgentId
+        WECOM_SECRET: !Ref WeComSecret
+        WECOM_RELAY_URL: !Ref WeComRelayUrl
+        WECOM_RELAY_AUTH: !Ref WeComRelayAuth
+        WECOM_KF_OPEN_KFID: !Ref WeComKfOpenKfId
+        TEACHER_OPENIDS: !Ref TeacherOpenids
+        TEACHER_SIGNUP_CODE: !Ref TeacherSignupCode
+        LINE_CHANNEL_SECRET: !Ref LineChannelSecret
+        LINE_CHANNEL_ACCESS_TOKEN: !Ref LineChannelAccessToken
+        BEDROCK_ENABLED: !Ref BedrockEnabled
+        BEDROCK_MODEL_ID: !Ref BedrockModelId
+        BEDROCK_CHAT_MODEL_ID: !Ref BedrockChatModelId
+        BEDROCK_EMBED_MODEL_ID: !Ref BedrockEmbedModelId
+        BEDROCK_EMBED_DIM: !Ref BedrockEmbedDim
+        KNOWLEDGE_TABLE: !Ref KnowledgeTable
+        # Zoom 凭证（demo 为空壳；上线把 ZOOM_ENABLED 设 true 并配 secret）
+        ZOOM_ENABLED: "false"
+        ZOOM_SECRET_NAME: !Sub "${AppName}/${Stage}/zoom"
+        ZOOM_USER_ID: "me"
+
+Resources:
+  # =========================================================================
+  # DynamoDB —— 4 张表 + 1 GSI（按需计费 + 静态加密）
+  # =========================================================================
+  StudentsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub "${AppName}-${Stage}-students"
+      BillingMode: PAY_PER_REQUEST
+      SSESpecification: { SSEEnabled: true }
+      AttributeDefinitions:
+        - { AttributeName: openid, AttributeType: S }
+      KeySchema:
+        - { AttributeName: openid, KeyType: HASH }
+      Tags:
+        - { Key: Project, Value: !Ref AppName }
+        - { Key: ManagedBy, Value: sam }
+        - { Key: Stage, Value: !Ref Stage }
+
+  CoursesTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub "${AppName}-${Stage}-courses"
+      BillingMode: PAY_PER_REQUEST
+      SSESpecification: { SSEEnabled: true }
+      AttributeDefinitions:
+        - { AttributeName: courseId, AttributeType: S }
+      KeySchema:
+        - { AttributeName: courseId, KeyType: HASH }
+      Tags:
+        - { Key: Project, Value: !Ref AppName }
+        - { Key: ManagedBy, Value: sam }
+        - { Key: Stage, Value: !Ref Stage }
+
+  EnrollmentsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub "${AppName}-${Stage}-enrollments"
+      BillingMode: PAY_PER_REQUEST
+      SSESpecification: { SSEEnabled: true }
+      AttributeDefinitions:
+        - { AttributeName: openid, AttributeType: S }
+        - { AttributeName: courseId, AttributeType: S }
+      KeySchema:
+        - { AttributeName: openid, KeyType: HASH }
+        - { AttributeName: courseId, KeyType: RANGE }
+      GlobalSecondaryIndexes:
+        - IndexName: GSI1                # courseId -> openid（查某课名单）
+          KeySchema:
+            - { AttributeName: courseId, KeyType: HASH }
+            - { AttributeName: openid, KeyType: RANGE }
+          Projection: { ProjectionType: ALL }
+      Tags:
+        - { Key: Project, Value: !Ref AppName }
+        - { Key: ManagedBy, Value: sam }
+        - { Key: Stage, Value: !Ref Stage }
+
+  GroupsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub "${AppName}-${Stage}-groups"
+      BillingMode: PAY_PER_REQUEST
+      SSESpecification: { SSEEnabled: true }
+      AttributeDefinitions:
+        - { AttributeName: courseId, AttributeType: S }
+        - { AttributeName: groupId, AttributeType: S }
+      KeySchema:
+        - { AttributeName: courseId, KeyType: HASH }
+        - { AttributeName: groupId, KeyType: RANGE }
+      Tags:
+        - { Key: Project, Value: !Ref AppName }
+        - { Key: ManagedBy, Value: sam }
+        - { Key: Stage, Value: !Ref Stage }
+
+  ResultsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub "${AppName}-${Stage}-results"
+      BillingMode: PAY_PER_REQUEST
+      SSESpecification: { SSEEnabled: true }
+      AttributeDefinitions:
+        - { AttributeName: openid, AttributeType: S }
+        - { AttributeName: itemKey, AttributeType: S }   # 形如 quiz#lesson1 / survey#lesson1
+      KeySchema:
+        - { AttributeName: openid, KeyType: HASH }
+        - { AttributeName: itemKey, KeyType: RANGE }
+      GlobalSecondaryIndexes:
+        - IndexName: GSI1                                  # 按 itemKey 查全部学员(老师导出)
+          KeySchema:
+            - { AttributeName: itemKey, KeyType: HASH }
+            - { AttributeName: openid, KeyType: RANGE }
+          Projection: { ProjectionType: ALL }
+      Tags:
+        - { Key: Project, Value: !Ref AppName }
+        - { Key: ManagedBy, Value: sam }
+        - { Key: Stage, Value: !Ref Stage }
+
+  KnowledgeTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub "${AppName}-${Stage}-knowledge"
+      BillingMode: PAY_PER_REQUEST
+      SSESpecification: { SSEEnabled: true }
+      AttributeDefinitions:
+        - { AttributeName: docId, AttributeType: S }
+        - { AttributeName: chunkId, AttributeType: S }
+      KeySchema:
+        - { AttributeName: docId, KeyType: HASH }
+        - { AttributeName: chunkId, KeyType: RANGE }
+      Tags:
+        - { Key: Project, Value: !Ref AppName }
+        - { Key: ManagedBy, Value: sam }
+        - { Key: Stage, Value: !Ref Stage }
+
+  # =========================================================================
+  # HTTP API（微信 Webhook 入口；无 JWT，靠微信签名校验）
+  # =========================================================================
+  HttpApi:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      StageName: !Ref Stage
+      CorsConfiguration:                 # 供课程网站(Vercel/CF Pages)跨域调用 /web/*
+        AllowOrigins: ["*"]
+        AllowHeaders: [content-type]
+        AllowMethods: [GET, POST, OPTIONS]
+      Tags:
+        Project: !Ref AppName
+        ManagedBy: sam
+        Stage: !Ref Stage
+
+  # =========================================================================
+  # Lambda —— 微信 Webhook 路由 + 业务 + Bedrock 意图
+  # =========================================================================
+  WebhookFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "${AppName}-${Stage}-webhook"
+      CodeUri: src/
+      Handler: handlers.webhook.handler
+      Policies:
+        - DynamoDBCrudPolicy: { TableName: !Ref StudentsTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref CoursesTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref EnrollmentsTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref GroupsTable }
+        - DynamoDBReadPolicy: { TableName: !Ref KnowledgeTable }   # RAG 检索（只读）
+        - Statement:                      # 读 Enrollments GSI1
+            Effect: Allow
+            Action: [dynamodb:Query]
+            Resource: !Sub "${EnrollmentsTable.Arn}/index/GSI1"
+        - Statement:                      # Bedrock 意图解析（东京区）
+            Effect: Allow
+            Action: [bedrock:InvokeModel]
+            Resource: "*"
+        - Statement:                      # Zoom 凭证（上线启用）
+            Effect: Allow
+            Action: [secretsmanager:GetSecretValue]
+            Resource: !Sub "arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:${AppName}/${Stage}/zoom-*"
+      Events:
+        WeChatVerify:                     # GET：微信服务器 URL 验签
+          Type: HttpApi
+          Properties: { ApiId: !Ref HttpApi, Method: GET, Path: "/wechat" }
+        WeChatMessage:                    # POST：接收消息/事件
+          Type: HttpApi
+          Properties: { ApiId: !Ref HttpApi, Method: POST, Path: "/wechat" }
+
+  # =========================================================================
+  # Lambda —— LINE Webhook（前端适配；后端业务复用 webhook._route）
+  # =========================================================================
+  LineWebhookFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "${AppName}-${Stage}-line-webhook"
+      CodeUri: src/
+      Handler: handlers.line_webhook.handler
+      Policies:
+        - DynamoDBCrudPolicy: { TableName: !Ref StudentsTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref CoursesTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref EnrollmentsTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref GroupsTable }
+        - DynamoDBReadPolicy: { TableName: !Ref KnowledgeTable }   # RAG 检索（只读）
+        - Statement:                      # 读 Enrollments GSI1
+            Effect: Allow
+            Action: [dynamodb:Query]
+            Resource: !Sub "${EnrollmentsTable.Arn}/index/GSI1"
+        - Statement:                      # Bedrock 意图解析 + RAG 生成（东京区）
+            Effect: Allow
+            Action: [bedrock:InvokeModel]
+            Resource: "*"
+        - Statement:                      # Zoom 凭证（上线启用）
+            Effect: Allow
+            Action: [secretsmanager:GetSecretValue]
+            Resource: !Sub "arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:${AppName}/${Stage}/zoom-*"
+      Events:
+        LineMessage:                      # POST：LINE 推送消息/事件（验签在代码内）
+          Type: HttpApi
+          Properties: { ApiId: !Ref HttpApi, Method: POST, Path: "/line" }
+
+  # =========================================================================
+  # Lambda —— 课程网站登录校验 API（/web/login）
+  # =========================================================================
+  WebFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "${AppName}-${Stage}-web"
+      CodeUri: src/
+      Handler: handlers.web.handler
+      Policies:
+        - DynamoDBReadPolicy: { TableName: !Ref StudentsTable }
+        - DynamoDBCrudPolicy: { TableName: !Ref ResultsTable }
+        - Statement:
+            Effect: Allow
+            Action: [dynamodb:Query]
+            Resource: !Sub "${ResultsTable.Arn}/index/GSI1"
+      Events:
+        Login:
+          Type: HttpApi
+          Properties: { ApiId: !Ref HttpApi, Method: POST, Path: "/web/login" }
+        LoginOptions:
+          Type: HttpApi
+          Properties: { ApiId: !Ref HttpApi, Method: OPTIONS, Path: "/web/login" }
+        Submit:
+          Type: HttpApi
+          Properties: { ApiId: !Ref HttpApi, Method: POST, Path: "/web/submit" }
+        SubmitOptions:
+          Type: HttpApi
+          Properties: { ApiId: !Ref HttpApi, Method: OPTIONS, Path: "/web/submit" }
+        Results:
+          Type: HttpApi
+          Properties: { ApiId: !Ref HttpApi, Method: POST, Path: "/web/results" }
+        ResultsOptions:
+          Type: HttpApi
+          Properties: { ApiId: !Ref HttpApi, Method: OPTIONS, Path: "/web/results" }
+        MyResults:
+          Type: HttpApi
+          Properties: { ApiId: !Ref HttpApi, Method: POST, Path: "/web/my-results" }
+        MyResultsOptions:
+          Type: HttpApi
+          Properties: { ApiId: !Ref HttpApi, Method: OPTIONS, Path: "/web/my-results" }
+
+  # =========================================================================
+  # Lambda —— 开课前 1 小时提醒（EventBridge 每 10 分钟触发）
+  # =========================================================================
+  ReminderFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "${AppName}-${Stage}-reminder"
+      CodeUri: src/
+      Handler: handlers.reminder.handler
+      Policies:
+        - DynamoDBCrudPolicy: { TableName: !Ref CoursesTable }
+        - DynamoDBReadPolicy: { TableName: !Ref EnrollmentsTable }
+        - Statement:
+            Effect: Allow
+            Action: [dynamodb:Query]
+            Resource: !Sub "${EnrollmentsTable.Arn}/index/GSI1"
+      Events:
+        Tick:
+          Type: Schedule
+          Properties:
+            Schedule: "rate(10 minutes)"
+            Description: 开课前1小时提醒扫描
+
+Outputs:
+  WeChatWebhookUrl:
+    Description: 填到微信公众平台「服务器配置」的 URL
+    Value: !Sub "https://${HttpApi}.execute-api.${AWS::Region}.amazonaws.com/${Stage}/wechat"
+  WebLoginApiUrl:
+    Description: 课程网站调用的登录校验接口
+    Value: !Sub "https://${HttpApi}.execute-api.${AWS::Region}.amazonaws.com/${Stage}/web/login"
+  LineWebhookUrl:
+    Description: 填到 LINE Developers「Messaging API → Webhook URL」
+    Value: !Sub "https://${HttpApi}.execute-api.${AWS::Region}.amazonaws.com/${Stage}/line"
+  Region:
+    Value: !Ref AWS::Region

@@ -1,0 +1,15 @@
+{
+  "app": "python app.py",
+  "watch": {
+    "include": ["**"],
+    "exclude": ["README.md", "cdk*.json", "**/__pycache__", "**/*.pyc"]
+  },
+  "context": {
+    "appName": "brightstar-shain",
+    "stage": "dev",
+    "kenshuApp": "brightstar-kenshu",
+    "jinjiApp": "brightstar-hr",
+    "@aws-cdk/core:newStyleStackSynthesis": true,
+    "@aws-cdk/aws-lambda:recognizeLayerVersion": true
+  }
+}
