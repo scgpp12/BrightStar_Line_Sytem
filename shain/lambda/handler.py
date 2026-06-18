@@ -16,6 +16,7 @@ import os
 
 import boto3
 
+from jinji.common import assist
 from jinji.common import authlib
 from jinji.common import business as jbiz
 from jinji.common import config as jconfig
@@ -40,6 +41,35 @@ CHOOSER = (
     "・发「研修」… 研修报名\n"
     "・发「人事」… 考勤·通勤费提交/模板/履历"
 )
+
+SHAIN_INTENTS = dict(assist.COMMON_INTENTS)
+SHAIN_INTENTS.update({
+    "kenshu": set(KENSHU_WORDS) | {"training", "study", "培训", "연수", "교육"},
+    "jinji": set(JINJI_WORDS) | {"hr", "attendance", "考勤", "인사", "근태"},
+})
+
+
+def _shain_chooser(name, lang):
+    if lang == "ja":
+        txt = ((("%s さん\n" % name) if name else "")
+               + "本日のご利用メニューを選んでください👇\n"
+                 "・研修：受講・お申込み\n・人事：勤怠・通勤費の提出 / テンプレ / 履歴")
+    else:
+        txt = ((("%s\n" % name) if name else "")
+               + "请选择今天要用的功能👇\n・研修：报名/咨询\n・人事：考勤·通勤费提交/模板/履历")
+    return assist.quick_reply(txt, [("📚 研修", "研修"), ("🗂️ 人事", "人事"), ("❓ヘルプ", "ヘルプ")])
+
+
+def _shain_help(lang):
+    title = "■ 社員メニュー（ボタンをタップ）" if lang == "ja" else "■ 社员菜单（点按钮）"
+    entries = [
+        ("研修 … 研修の受講・お申込み", "研修 … 报名/咨询", "📚 研修", "研修"),
+        ("人事 … 勤怠・通勤費の提出", "人事 … 考勤·通勤费提交", "🗂️ 人事", "人事"),
+        ("Excel を送る → 人事へ提出（再提出も可）", "发 Excel → 人事提交（可重复）", None, None),
+        ("登録解除 … 別人で登録し直す", "登録解除 … 换人重新登记", None, None),
+    ]
+    return assist.help_message(lang, title, entries)
+
 
 _ddb = None
 SESSION_TABLE = os.environ.get("SHAIN_SESSION_TABLE", "")
@@ -168,31 +198,51 @@ def _dispatch(ev, base):
     name = emp.get("name") or ""
     today = authlib.today_jst()
 
-    # ---- ② 明示モード切替 ----
-    if mtype == "text" and text in KENSHU_WORDS:
+    # ---- ② 言語：選択ワード → 設定 → モードチューザー ----
+    if mtype == "text":
+        lw = assist.detect_lang_word(text)
+        if lw:
+            assist.set_lang("shain", uid, lw)
+            jline.reply_messages(rt, [_shain_chooser(name, lw)])
+            return
+
+    # ---- ③ 毎日初回 → 言語チューザーを最優先 ----
+    if assist.needs_lang_today("shain", uid):
+        jline.reply_messages(rt, [assist.lang_chooser(name)])
+        return
+
+    lang = assist.get_lang("shain", uid)
+    canon = assist.resolve(text, SHAIN_INTENTS) if mtype == "text" else None
+
+    # ---- ④ ヘルプ ----
+    if canon == "help":
+        jline.reply_messages(rt, [_shain_help(lang)])
+        return
+
+    # ---- ⑤ 明示モード切替（多言語）----
+    if canon == "kenshu" or (mtype == "text" and text in KENSHU_WORDS):
         _set_session(uid, KENSHU, today)
         _ensure_kenshu_student(uid, name)
         jline.reply(rt, kenshu_web._route(_kenshu_msg(ev, as_event=True)))
         return
-    if mtype == "text" and text in JINJI_WORDS:
+    if canon == "jinji" or (mtype == "text" and text in JINJI_WORDS):
         _set_session(uid, JINJI, today)
         _jinji_entry(ev, base)
         return
 
-    # ---- ③ ファイル/画像 → 人事(提出)固定 ----
+    # ---- ⑥ ファイル/画像 → 人事(提出)固定 ----
     if mtype in ("file", "image"):
         _set_session(uid, JINJI, today)
         jinji_web._route(ev, base)
         return
 
-    # ---- ④ 当日まだモード未選択 → チューザー（日次リセット。氏名を冒頭に表示）----
+    # ---- ⑦ 当日まだモード未選択 → モードチューザー（Quick Reply）----
     sess = _get_session(uid)
     if not sess or sess.get("modeDate") != today or not sess.get("mode"):
-        greet = ("%s さん\n" % name) if name else ""
-        jline.reply(rt, greet + CHOOSER)
+        jline.reply_messages(rt, [_shain_chooser(name, lang)])
         return
 
-    # ---- ⑤ 当日のモードに従って振り分け ----
+    # ---- ⑧ 当日のモードに従って振り分け ----
     if sess["mode"] == KENSHU:
         _ensure_kenshu_student(uid, name)
         jline.reply(rt, kenshu_web._route(_kenshu_msg(ev)))

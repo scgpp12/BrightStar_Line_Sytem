@@ -7,13 +7,38 @@ role=講師(teacher) のみ通す。受講者は「BrightStar 社員アシスタ
 import base64
 import logging
 
-from common import authlib, business, line
+from common import assist, authlib, business, line
 from handlers import webhook
 
 log = logging.getLogger()
 log.setLevel(logging.INFO)
 
 CHANNEL = "kenshu"
+
+KENSHU_INTENTS = dict(assist.COMMON_INTENTS)
+
+_HELP_ENTRIES = [
+    ("建课 … 新規コース作成", "建课 … 新建课程", None, None),
+    ("发布 … コース公開(Zoom)", "发布 … 发布课程(Zoom)", None, None),
+    ("改课 / 删课 … 変更 / 削除", "改课 / 删课 … 修改 / 删除", None, None),
+    ("学员列表 … 受講者一覧", "学员列表 … 学员列表", "学员列表", "学员列表"),
+    ("名单 / 分组 … 名簿 / ランダム分組", "名单 / 分组 … 名单 / 随机分组", None, None),
+    ("講師ヘルプ … 管理コマンド一覧", "讲师帮助 … 管理命令一览", "講師ヘルプ", "老师帮助"),
+    ("本日認証 … 当日の本人確認", "本日認证 … 当天本人确认", "認証", "認証"),
+    ("登録解除 … 別人で認証し直す", "登録解除 … 换人重新认证", None, None),
+]
+
+
+def _kenshu_help(lang):
+    title = "■ 講師メニュー（ボタンをタップ）" if lang == "ja" else "■ 讲师菜单（点按钮）"
+    return assist.help_message(lang, title, _HELP_ENTRIES)
+
+
+def _auth_ok_help(lang, name):
+    h = _kenshu_help(lang)
+    head = ("✅ 認証OK：%s（講師）" % name) if lang == "ja" else ("✅ 认证通过：%s（讲师）" % name)
+    h["text"] = head + "\n\n" + h["text"]
+    return h
 
 AUTH_PROMPT = (
     "ご本人確認のため「所属部署 お名前」を入力してください。\n"
@@ -57,40 +82,39 @@ def _is_whitelisted(openid):
         return False
 
 
-def _handle_event(ev) -> str:
+def _handle_event(ev):
+    """str（テキスト返信）または dict（Quick Reply 等の message）を返す。"""
     raw = ev.get("fromUser")
     if not raw:
         return ""
     openid = business.resolve_openid(raw)
+    text = (ev.get("content") or "").strip() if ev.get("msgType") == "text" else ""
 
-    # 登録解除：別人で認証し直す／誤紐付けのリセット
-    if ev.get("msgType") == "text" and (ev.get("content") or "").strip() in authlib.RESET_WORDS:
+    # 登録解除
+    if text in authlib.RESET_WORDS:
         authlib.unbind(raw)
         return ("認証の紐付けを解除しました。次回「所属部署 お名前」で認証してください。\n"
                 "已解除认证绑定，下次请用「部门 姓名」认证。")
 
-    # TEACHER_OPENIDS 白名单は免除
-    if _is_whitelisted(openid):
-        return webhook._route(ev)
+    # 認証（TEACHER_OPENIDS 白名单は免除）
+    if not _is_whitelisted(openid):
+        action, item = authlib.gate(CHANNEL, raw, text, _teacher_pred)
+        if action not in ("ok", "pass"):
+            return {"tap": MSG_TAP, "wrong_role": MSG_WRONG_ROLE, "not_found": MSG_NOT_FOUND,
+                    "ambiguous": MSG_AMBIGUOUS, "taken": MSG_TAKEN}.get(action, AUTH_PROMPT)
 
-    gate_text = ev.get("content", "") if ev.get("msgType") == "text" else ""
-    action, item = authlib.gate(CHANNEL, raw, gate_text, _teacher_pred)
-    if action == "pass":
-        return webhook._route(ev)            # 認証済み講師：共用ルート
-    if action == "ok":
-        return ("✅ 認証OK：%s（%s）\n講師メニュー：建课/发布/改课/删课/学员列表/名单/分组\n"
-                "（「老师帮助」で一覧）" % (item.get("name", ""), item.get("department", "")))
-    if action == "tap":
-        return MSG_TAP
-    if action == "wrong_role":
-        return MSG_WRONG_ROLE
-    if action == "not_found":
-        return MSG_NOT_FOUND
-    if action == "ambiguous":
-        return MSG_AMBIGUOUS
-    if action == "taken":
-        return MSG_TAKEN
-    return AUTH_PROMPT  # need_bind
+    # === 認証済み講師 ===
+    nm = (authlib.find_by_line(raw) or {}).get("name", "")
+    lw = assist.detect_lang_word(text)
+    if lw:
+        assist.set_lang(CHANNEL, raw, lw)
+        return _auth_ok_help(lw, nm)                 # dict
+    if assist.needs_lang_today(CHANNEL, raw):
+        return assist.lang_chooser(nm)               # dict
+    lang = assist.get_lang(CHANNEL, raw)
+    if assist.resolve(text, KENSHU_INTENTS) == "help":
+        return _kenshu_help(lang)                    # dict
+    return webhook._route(ev)                         # 講師ルーティング（text）
 
 
 def handler(event, context):
@@ -103,9 +127,12 @@ def handler(event, context):
 
     for ev in line.parse_events(body_bytes.decode("utf-8")):
         try:
-            reply_text = _handle_event(ev)
-            if reply_text:
-                line.reply(ev.get("replyToken", ""), reply_text)
+            out = _handle_event(ev)
+            rt = ev.get("replyToken", "")
+            if isinstance(out, dict):
+                line.reply_messages(rt, [out])      # Quick Reply 等
+            elif out:
+                line.reply(rt, out)
         except Exception:  # noqa: BLE001
             log.exception("line route error")
     return {"statusCode": 200, "body": ""}

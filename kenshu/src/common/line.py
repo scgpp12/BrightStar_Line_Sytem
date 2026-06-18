@@ -97,6 +97,13 @@ def reply(reply_token: str, text: str) -> dict:
                               "messages": [{"type": "text", "text": text[:5000]}]})
 
 
+def reply_messages(reply_token: str, messages: list) -> dict:
+    """任意の message オブジェクト列で返信（Quick Reply 等）。"""
+    if not reply_token:
+        return {"errcode": -1, "errmsg": "no_reply_token"}
+    return _post(_REPLY_URL, {"replyToken": reply_token, "messages": messages})
+
+
 def push(user_id: str, text: str) -> dict:
     """主动推送（开课提醒用；计入 push 配额）。user_id 为不带前缀的 LINE userId。"""
     return _post(_PUSH_URL, {"to": user_id,
