@@ -69,6 +69,7 @@ class ShainStack(Stack):
             # 人事テーブル / バケット（共有）
             "EMPLOYEES_TABLE": f"{jprefix}-employees",
             "ROSTER_TABLE": f"{jprefix}-roster",
+            "AUTH_TABLE": f"{jprefix}-auth",
             "SUBMISSIONS_TABLE": f"{jprefix}-submissions",
             "SUBMISSIONS_GSI1": "GSI1",
             "BUCKET_NAME": bucket_name,
@@ -103,6 +104,7 @@ class ShainStack(Stack):
             f"{kprefix}-students", f"{kprefix}-courses", f"{kprefix}-enrollments",
             f"{kprefix}-groups",
             f"{jprefix}-employees", f"{jprefix}-roster", f"{jprefix}-submissions",
+            f"{jprefix}-auth",
         ]
         ro_tables = [f"{kprefix}-knowledge"]
         table_resources = [tarn(n) for n in rw_tables + ro_tables]

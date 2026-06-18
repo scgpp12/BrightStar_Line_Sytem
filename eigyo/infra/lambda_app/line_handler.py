@@ -25,6 +25,8 @@ from pathlib import Path
 
 import boto3
 
+import authlib  # 全社花名册ベースの日次認証（営業部のみ）
+
 from transit.registry import StationRegistry  # noqa: E402（以降の import 群と一体）
 from transit.ekitan_source import EkitanScraper
 from transit.dynamo_cache import DynamoDBCache
@@ -33,6 +35,32 @@ from transit.models import Strategy
 from transit.exceptions import TransitDataError
 from staff.dynamo_repository import DynamoDBStaffRepository
 from staff.models import StaffStatus
+
+CHANNEL = "eigyo"
+
+_AUTH_PROMPT = (
+    "ご本人確認のため「所属部署 お名前」を入力してください。\n"
+    "例：営業部 田中\n────────\n"
+    "请输入「部门 姓名」确认本人。\n例：营业部 田中"
+)
+_AUTH_WRONG = (
+    "ご本人確認できましたが、営業部の方ではありません。本ツールは営業部専用です。\n"
+    "已确认本人，但你不是营业部，本工具仅限营业部使用。"
+)
+_AUTH_NOT_FOUND = "社員名簿に該当者が見つかりません。人事にご確認ください。\n花名册查无此人，请联系人事。"
+_AUTH_AMBIGUOUS = "同部署・同氏名が複数います。社員番号も付けてください（例：営業部 田中 E002）。"
+
+
+def _sales_pred(item) -> bool:
+    return item.get("role") == "sales" or "営業" in (item.get("department") or "")
+
+
+def _auth_message(status: str, item) -> str:
+    if status == "ok":
+        return ("✅ 認証OK：%s（%s）\n現場の駅名を送ってください（例：東京 / 新宿）。\n"
+                "认证通过，请发送现场站名。" % (item.get("name", ""), item.get("department", "")))
+    return {"wrong_role": _AUTH_WRONG, "not_found": _AUTH_NOT_FOUND,
+            "ambiguous": _AUTH_AMBIGUOUS}.get(status, _AUTH_PROMPT)
 
 _REGISTRY = StationRegistry.from_file(Path(__file__).resolve().parent / "stations.json")
 _ssm = boto3.client("ssm")
@@ -157,6 +185,20 @@ def handler(event: dict, context) -> dict:
         user_id = (ev.get("source") or {}).get("userId")
         if not reply_token:
             continue
+
+        # --- 日次認証ゲート（営業部のみ・毎日「部门 姓名」で本人確認）---
+        auth_uid = ("line:" + user_id) if user_id else None
+        if not auth_uid or not authlib.is_authed(CHANNEL, auth_uid):
+            if auth_uid:
+                status, item = authlib.authenticate(CHANNEL, auth_uid, text, _sales_pred)
+            else:
+                status, item = "need_input", None
+            try:
+                _reply(reply_token, _auth_message(status, item))
+            except Exception:  # noqa: BLE001
+                pass
+            continue
+        # --- 認証済み：現場クエリ処理 ---
 
         if user_id:
             # 1) 即 ack（収集中…）2) 重い処理は非同期ワーカーへ 3) すぐ 200 を返す

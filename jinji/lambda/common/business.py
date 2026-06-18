@@ -72,6 +72,29 @@ def roster_find_by_name(name):
     return [r for r in roster_scan() if (r.get("name") or "").strip() == name]
 
 
+def roster_find_by_dept_name(dept, name):
+    """部门+姓名 同时匹配（去空白）。重名靠部门区分。"""
+    dn, nn = _norm_name(dept), _norm_name(name)
+    return [r for r in roster_scan()
+            if _norm_name(r.get("name")) == nn and _norm_name(r.get("department")) == dn]
+
+
+def _parse_dept_name(text):
+    """'部门 姓名' / '部门 姓名 E001' / 'E001' → 匹配的花名册条目列表。"""
+    toks = [t for t in re.split(r"[\s　]+", (text or "").strip()) if t]
+    if not toks:
+        return None  # 形式不符
+    if len(toks) == 1:
+        if re.match(r"^[Ee]\d+$", toks[0]):
+            r = roster_get(toks[0].upper())
+            return [r] if r else []
+        return None  # 单词且非编号 → 不当作认证输入
+    if re.match(r"^[Ee]\d+$", toks[-1]):
+        r = roster_get(toks[-1].upper())
+        return [r] if r else []
+    return roster_find_by_dept_name(toks[0], " ".join(toks[1:]))
+
+
 def roster_people():
     """需要提交的对象：花名册全员（含人事；如需排除 hr 在此过滤）。"""
     return roster_scan()
@@ -86,13 +109,26 @@ def _next_emp_id():
     return "E%03d" % (mx + 1)
 
 
+# 角色规范化（含中日别名）。可选值：employee / hr / teacher(讲师) / sales(营业)
+_ROLE_ALIAS = {
+    "employee": "employee", "社員": "employee", "员工": "employee", "社员": "employee",
+    "hr": "hr", "人事": "hr",
+    "teacher": "teacher", "講師": "teacher", "讲师": "teacher", "教員": "teacher", "教师": "teacher",
+    "sales": "sales", "営業": "sales", "营业": "sales", "営業部": "sales",
+}
+
+
+def norm_role(role):
+    return _ROLE_ALIAS.get((role or "").strip().lower(), _ROLE_ALIAS.get((role or "").strip(), "employee"))
+
+
 def roster_add(name, department, role="employee"):
     emp_id = _next_emp_id()
     item = {
         "empId": emp_id,
         "name": (name or "").strip(),
         "department": (department or "").strip(),
-        "role": role if role in ("employee", "hr") else "employee",
+        "role": norm_role(role),
         "createdAt": _now_iso(),
     }
     db.roster().put_item(Item=item)
@@ -120,8 +156,8 @@ def roster_update_field(emp_id, field_key, value):
     if not field:
         return None, None
     value = (value or "").strip()
-    if field == "role" and value not in ("employee", "hr"):
-        return None, None
+    if field == "role":
+        value = norm_role(value)
     db.roster().update_item(
         Key={"empId": emp_id},
         UpdateExpression="SET #f=:v, updatedAt=:u",
@@ -189,26 +225,27 @@ def list_hr():
 # ---------------- 注册（仅姓名 → 花名册匹配绑定） ----------------
 
 def handle_registration(user_id, text):
-    """返回 (handled, reply_text)。未绑定/绑定中时接管对话。"""
+    """返回 (handled, reply_text)。未绑定/绑定中时接管对话。
+    本人确认＝输入「部门 姓名」(重名时再加 社員番号)，与花名册一致才绑定。"""
     link = get_employee(user_id)
     if link and link.get("status") == "active":
         return False, None
 
     if not link:
         db.employees().put_item(Item={
-            "userId": user_id, "status": "awaiting_name", "createdAt": _now_iso(),
+            "userId": user_id, "status": "awaiting_id", "createdAt": _now_iso(),
         })
-        return True, i18n.T("ask_name")
+        return True, i18n.T("ask_dept_name")
 
-    if link.get("status") == "awaiting_name":
-        name = (text or "").strip()
-        matches = roster_find_by_name(name)
+    if link.get("status") in ("awaiting_id", "awaiting_name"):
+        matches = _parse_dept_name(text)
+        if matches is None:                       # 形式不符 → 再提示
+            return True, i18n.T("ask_dept_name")
         if len(matches) == 0:
-            return True, i18n.T("not_in_roster", name=name)
+            return True, i18n.T("not_in_roster", name=(text or "").strip())
         if len(matches) > 1:
-            return True, i18n.T("dup_name", name=name)
+            return True, i18n.T("dup_name_id")    # 要求加社員番号消歧
         r = matches[0]
-        # 绑定
         db.employees().update_item(
             Key={"userId": user_id},
             UpdateExpression="SET #s=:s, empId=:e, #n=:n",

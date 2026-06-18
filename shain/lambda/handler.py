@@ -3,34 +3,41 @@
 研修(受講・申込) と 人事(勤怠・通勤費の提出) の「社員側」機能を 1 つの channel に集約。
 两套后端を vendoring（kenshu.* / jinji.*）し、ユーザーごとの mode（研修/人事）で振り分ける。
 
-- I/O 層は jinji.common.line に一本化（署名検証・返信・添付DL すべて社員 channel の SSM 凭证）。
-- 研修側：kenshu.handlers.webhook._route(msg) はテキストを返す → jline.reply で返信。
-- 人事側：jinji.handlers.line_webhook._route(ev, base) は内部で返信（登録・提出・テンプレ・履歴・/dl）。
-- mode は DynamoDB(SHAIN_SESSION_TABLE) に保存。未選択時はチューザーを表示。
+セキュリティ／フロー：
+  1) 初回のみ本人確認：「部门 姓名」(重名は社員番号追加) を全社花名册(roster)で照合 → 在籍者のみ登録。
+     在籍しない場合は「人事へ連絡」。
+  2) 登録後は **毎日（東京時間）最初の利用時に「研修／人事」チューザー** を表示（mode は日次リセット）。
+  3) 研修モード：花名册の氏名から受講者(Students)を自動プロビジョニング（二重登録なし）→ kenshu._route。
+     人事モード：jinji._route（登録・提出・テンプレ・履歴・/dl）。
+I/O は jinji.common.line に一本化（社員 channel の SSM 凭证）。
 """
 import base64
 import os
 
 import boto3
 
+from jinji.common import authlib
+from jinji.common import business as jbiz
 from jinji.common import config as jconfig
 from jinji.common import line as jline
 from jinji.handlers import line_webhook as jinji_web
+from kenshu.common import business as kbiz
+from kenshu.common import db as kdb
+from kenshu.common.timeutils import iso_utc
 from kenshu.handlers import webhook as kenshu_web
 
 KENSHU, JINJI = "kenshu", "jinji"
 
-# モード切替キーワード
-KENSHU_WORDS = {"研修", "研修メニュー", "研修モード", "研修アシスタント", "けんしゅう", "📚研修", "けんしゅうモード"}
+KENSHU_WORDS = {"研修", "研修メニュー", "研修モード", "研修アシスタント", "けんしゅう", "📚研修"}
 JINJI_WORDS = {"人事", "人事メニュー", "人事モード", "勤怠", "通勤費", "通勤费", "経費", "提出", "🗂️人事"}
 
 CHOOSER = (
-    "ようこそ！ご利用の機能を選んでください👇\n"
+    "本日のご利用メニューを選んでください👇\n"
     "・「研修」… 研修の受講・お申込み\n"
     "・「人事」… 勤怠・通勤費の提出 / テンプレ / 履歴\n"
     "────────\n"
-    "请选择功能：\n"
-    "・发「研修」… 研修报名/咨询\n"
+    "请选择今天要用的功能：\n"
+    "・发「研修」… 研修报名\n"
     "・发「人事」… 考勤·通勤费提交/模板/履历"
 )
 
@@ -38,7 +45,7 @@ _ddb = None
 SESSION_TABLE = os.environ.get("SHAIN_SESSION_TABLE", "")
 
 
-# ---------------- mode 永続化 ----------------
+# ---------------- セッション（mode + 日付） ----------------
 def _table():
     global _ddb
     if _ddb is None:
@@ -46,20 +53,30 @@ def _table():
     return _ddb.Table(SESSION_TABLE)
 
 
-def _get_mode(uid):
+def _get_session(uid):
     try:
-        item = _table().get_item(Key={"userId": uid}).get("Item")
-        return item.get("mode") if item else None
+        return _table().get_item(Key={"userId": uid}).get("Item")
     except Exception as e:  # noqa: BLE001
-        print("get_mode error:", repr(e))
+        print("get_session error:", repr(e))
         return None
 
 
-def _set_mode(uid, mode):
+def _set_session(uid, mode, date):
     try:
-        _table().put_item(Item={"userId": uid, "mode": mode})
+        _table().put_item(Item={"userId": uid, "mode": mode, "modeDate": date})
     except Exception as e:  # noqa: BLE001
-        print("set_mode error:", repr(e))
+        print("set_session error:", repr(e))
+
+
+# ---------------- 研修学员の自動プロビジョニング ----------------
+def _ensure_kenshu_student(uid, name):
+    s = kbiz.get_student(uid)
+    if s and s.get("status") == "active":
+        return
+    kdb.students().put_item(Item={
+        "openid": uid, "status": "active", "role": "student",
+        "lang": "ja", "name": name or "", "createdAt": iso_utc(),
+    })
 
 
 # ---------------- HTTP 補助 ----------------
@@ -87,8 +104,7 @@ def _base_url(event):
 
 # ---------------- エントリ ----------------
 def handler(event, context):
-    # GET /dl?... → 人事の添付/テンプレDL（社員 channel の Function URL ホストで 302）
-    if _method(event) == "GET":
+    if _method(event) == "GET":                 # 人事 添付/テンプレ DL
         return jinji_web._handle_download(event)
 
     body = _raw_body(event)
@@ -107,7 +123,6 @@ def handler(event, context):
 
 # ---------------- 振り分け ----------------
 def _kenshu_msg(ev, *, as_event=False):
-    """jinji 解析イベント → kenshu webhook._route が期待する msg 形へ。"""
     if as_event:
         return {"fromUser": ev.get("fromUser"), "msgType": "event",
                 "content": "", "event": "subscribe", "eventKey": ""}
@@ -124,42 +139,53 @@ def _dispatch(ev, base):
     mtype = ev.get("msgType")
     text = (ev.get("content") or "").strip()
 
-    # フォロー時：チューザー
-    if mtype == "event" and ev.get("event") == "subscribe":
-        jline.reply(rt, CHOOSER)
+    # ---- ① 初回本人確認（花名册 dept+name）。未登録なら登録フローが会話を占有 ----
+    emp = jbiz.get_employee(uid)
+    if not (emp and emp.get("status") == "active"):
+        if mtype == "text":
+            _, reply = jbiz.handle_registration(uid, text)
+            jline.reply(rt, reply or jbiz.i18n.T("ask_dept_name"))
+        else:  # subscribe / file 等
+            _, reply = jbiz.handle_registration(uid, "")
+            jline.reply(rt, reply or jbiz.i18n.T("ask_dept_name"))
         return
 
-    # 明示モード切替（→ そのドメインの入口を表示）
+    name = emp.get("name") or ""
+    today = authlib.today_jst()
+
+    # ---- ② 明示モード切替 ----
     if mtype == "text" and text in KENSHU_WORDS:
-        _set_mode(uid, KENSHU)
+        _set_session(uid, KENSHU, today)
+        _ensure_kenshu_student(uid, name)
         jline.reply(rt, kenshu_web._route(_kenshu_msg(ev, as_event=True)))
         return
     if mtype == "text" and text in JINJI_WORDS:
-        _set_mode(uid, JINJI)
+        _set_session(uid, JINJI, today)
         _jinji_entry(ev, base)
         return
 
-    # ファイル/画像 → 人事(提出)に固定
+    # ---- ③ ファイル/画像 → 人事(提出)固定 ----
     if mtype in ("file", "image"):
-        _set_mode(uid, JINJI)
+        _set_session(uid, JINJI, today)
         jinji_web._route(ev, base)
         return
 
-    # 既存モードに従って振り分け
-    mode = _get_mode(uid)
-    if mode == KENSHU:
+    # ---- ④ 当日まだモード未選択 → チューザー（日次リセット）----
+    sess = _get_session(uid)
+    if not sess or sess.get("modeDate") != today or not sess.get("mode"):
+        jline.reply(rt, CHOOSER)
+        return
+
+    # ---- ⑤ 当日のモードに従って振り分け ----
+    if sess["mode"] == KENSHU:
+        _ensure_kenshu_student(uid, name)
         jline.reply(rt, kenshu_web._route(_kenshu_msg(ev)))
         return
-    if mode == JINJI:
-        jinji_web._route(ev, base)
-        return
-
-    # 未選択：チューザー
-    jline.reply(rt, CHOOSER)
+    jinji_web._route(ev, base)
 
 
 def _jinji_entry(ev, base):
-    """人事モードに入った直後：登録案内 or メニューを出す（subscribe 相当）。"""
+    """人事モード突入直後：メニュー表示（subscribe 相当）。"""
     fake = dict(ev)
     fake["msgType"] = "event"
     fake["event"] = "subscribe"

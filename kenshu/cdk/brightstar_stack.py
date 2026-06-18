@@ -36,6 +36,11 @@ class BrightStarStack(Stack):
             return v if v is not None else default
 
         prefix = f"{app_name}-{stage}"
+        # 全社花名册 / 日次認証テーブルは人事(jinji)スタックが作成。名前で参照する。
+        jinji_app = c("jinjiApp", "brightstar-hr")
+        jinji_prefix = f"{jinji_app}-{stage}"
+        roster_table = f"{jinji_prefix}-roster"
+        auth_table = f"{jinji_prefix}-auth"
         Tags.of(self).add("Project", app_name)
         Tags.of(self).add("ManagedBy", "cdk")
         Tags.of(self).add("Stage", stage)
@@ -102,6 +107,9 @@ class BrightStarStack(Stack):
             # LINE 凭证（SSM 懒加载）
             "LINE_SECRET_PARAM": line_secret_param,
             "LINE_TOKEN_PARAM": line_token_param,
+            # 日次認証（花名册 + auth テーブルは人事スタック所有・名前参照）
+            "ROSTER_TABLE": roster_table,
+            "AUTH_TABLE": auth_table,
             # Bedrock：意图 / RAG 生成 / 向量
             "BEDROCK_ENABLED": c("bedrockEnabled", "false"),
             "BEDROCK_MODEL_ID": c("bedrockModelId", "anthropic.claude-3-haiku-20240307-v1:0"),
@@ -162,6 +170,15 @@ class BrightStarStack(Stack):
         line_webhook.add_to_role_policy(zoom_secret_policy)
         line_webhook.add_to_role_policy(ssm_policy)
         line_webhook.add_to_role_policy(kms_policy)
+        # 跨栈：花名册(读 + lineUserId 紐付け) + 认证表(读写)
+        line_webhook.add_to_role_policy(iam.PolicyStatement(
+            actions=["dynamodb:GetItem", "dynamodb:Scan", "dynamodb:UpdateItem"],
+            resources=[f"arn:aws:dynamodb:{self.region}:{self.account}:table/{roster_table}"],
+        ))
+        line_webhook.add_to_role_policy(iam.PolicyStatement(
+            actions=["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:UpdateItem"],
+            resources=[f"arn:aws:dynamodb:{self.region}:{self.account}:table/{auth_table}"],
+        ))
 
         # ---------- Lambda：web（网站登录/成绩）----------
         web = fn("WebFunction", "handlers.web.handler")

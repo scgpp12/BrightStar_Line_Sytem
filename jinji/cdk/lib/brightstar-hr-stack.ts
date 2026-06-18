@@ -116,6 +116,15 @@ export class BrightstarHrStack extends cdk.Stack {
       projectionType: dynamodb.ProjectionType.ALL,
     });
 
+    // 全 channel 共有：日次認証状態（pk='<channel>#<userId>'）。研修/营业/社員 も跨栈で読み書き。
+    const auth = new dynamodb.Table(this, "AuthTable", {
+      tableName: `${prefix}-auth`,
+      partitionKey: { name: "pk", type: dynamodb.AttributeType.STRING },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      encryption: dynamodb.TableEncryption.AWS_MANAGED,
+      removalPolicy,
+    });
+
     // ---------------- Lambda ----------------
     const code = lambda.Code.fromAsset(path.join(__dirname, "../../lambda"));
     const commonEnv: Record<string, string> = {
@@ -123,6 +132,7 @@ export class BrightstarHrStack extends cdk.Stack {
       STAGE: stage,
       EMPLOYEES_TABLE: employees.tableName,
       ROSTER_TABLE: roster.tableName,
+      AUTH_TABLE: auth.tableName,
       SUBMISSIONS_TABLE: submissions.tableName,
       SUBMISSIONS_GSI1: "GSI1",
       BUCKET_NAME: bucket.bucketName,
@@ -130,6 +140,7 @@ export class BrightstarHrStack extends cdk.Stack {
       HR_USERIDS: hrUserIds,
       LINE_SECRET_PARAM: lineSecretParam,
       LINE_TOKEN_PARAM: lineTokenParam,
+      MAIL_PROOFREAD_URL: this.node.tryGetContext("mailProofreadUrl") || "",
       BEDROCK_ENABLED: "false",
       TZ: "Asia/Tokyo",
     };
@@ -160,6 +171,7 @@ export class BrightstarHrStack extends cdk.Stack {
     employees.grantReadWriteData(webhookFn);
     roster.grantReadWriteData(webhookFn);              // 人事 CRUD 花名册
     submissions.grantReadWriteData(webhookFn);
+    auth.grantReadWriteData(webhookFn);                // 日次認証状態
     bucket.grantReadWrite(webhookFn);
     employees.grantReadData(reminderFn);
     roster.grantReadData(reminderFn);

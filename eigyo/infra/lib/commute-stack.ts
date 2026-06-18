@@ -111,12 +111,29 @@ export class CommuteStack extends cdk.Stack {
         LINE_TOKEN_PARAM: lineTokenParam,
         USE_BEDROCK_NORMALIZE: "1",
         BEDROCK_MODEL_ID: "jp.anthropic.claude-haiku-4-5-20251001-v1:0",
+        // 全社花名册 / 日次認証（人事スタック所有・名前参照）。営業部のみ利用可。
+        ROSTER_TABLE: "brightstar-hr-dev-roster",
+        AUTH_TABLE: "brightstar-hr-dev-auth",
       },
     });
 
     staffTable.grantReadWriteData(lineFn);
     cacheTable.grantReadWriteData(lineFn);
     lineFn.addToRolePolicy(bedrockPolicy);
+
+    // 跨栈：花名册(読 + lineUserId 紐付け) + 认证表(読写)
+    lineFn.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: ["dynamodb:GetItem", "dynamodb:Scan", "dynamodb:UpdateItem"],
+        resources: [`arn:aws:dynamodb:${this.region}:${this.account}:table/brightstar-hr-dev-roster`],
+      })
+    );
+    lineFn.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:UpdateItem"],
+        resources: [`arn:aws:dynamodb:${this.region}:${this.account}:table/brightstar-hr-dev-auth`],
+      })
+    );
 
     // 非同期ワーカーとして自分自身を Event 呼び出しするための権限
     // （関数名は自動生成なのでスタック名プレフィクスのワイルドカードで循環参照を回避）

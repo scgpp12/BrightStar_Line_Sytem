@@ -32,6 +32,9 @@ HR_USERIDS = [
 # 提醒 Lambda 名（webhook 手动催办时异步 invoke）
 REMINDER_FUNCTION_NAME = os.environ.get("REMINDER_FUNCTION_NAME", "")
 
+# メール自動校正ツール（独立 Web。人事むけリンク。sons02 Tailscale Funnel で公開）
+MAIL_PROOFREAD_URL = os.environ.get("MAIL_PROOFREAD_URL", "")
+
 # Bedrock 意图解析（可关；关掉则纯关键词路由）
 BEDROCK_ENABLED = os.environ.get("BEDROCK_ENABLED", "false").lower() == "true"
 BEDROCK_MODEL_ID = os.environ.get(

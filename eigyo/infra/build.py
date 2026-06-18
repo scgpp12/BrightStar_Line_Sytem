@@ -41,6 +41,7 @@ def build_function() -> None:
     LAMBDA_DIR.mkdir(parents=True)
     shutil.copy2(INFRA / "lambda_app" / "handler.py", LAMBDA_DIR / "handler.py")
     shutil.copy2(INFRA / "lambda_app" / "line_handler.py", LAMBDA_DIR / "line_handler.py")
+    shutil.copy2(INFRA / "lambda_app" / "authlib.py", LAMBDA_DIR / "authlib.py")
     shutil.copy2(ROOT / "stations.json", LAMBDA_DIR / "stations.json")
     _copytree(ROOT / "transit", LAMBDA_DIR / "transit")
     _copytree(ROOT / "staff", LAMBDA_DIR / "staff")

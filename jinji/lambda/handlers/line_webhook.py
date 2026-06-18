@@ -15,8 +15,31 @@ import urllib.parse
 
 import boto3
 
-from common import business, config, line, messaging, s3util
+from common import authlib, business, config, line, messaging, s3util
 from common.i18n import T, type_label
+
+CHANNEL = "jinji"
+
+
+def _hr_pred(item):
+    """认证人是否有人事权限：花名册 role=hr 或 在 HR_USERIDS 白名单。"""
+    return item.get("role") == "hr"
+
+
+def _auth_reply(rt, status, item):
+    """非认证态下，统一的认证应答。"""
+    if status == "ok":
+        menu = T("menu_hr")
+        line.reply(rt, T("auth_ok_hr", name=item.get("name", ""),
+                         dept=item.get("department", ""), menu=menu))
+    elif status == "wrong_role":
+        line.reply(rt, T("wrong_role_hr"))
+    elif status == "not_found":
+        line.reply(rt, T("not_in_roster", name="—"))
+    elif status == "ambiguous":
+        line.reply(rt, T("dup_name_id"))
+    else:  # need_input
+        line.reply(rt, T("ask_dept_name"))
 
 _lambda = None
 
@@ -130,14 +153,18 @@ def _route(ev, base=""):
     rt = ev.get("replyToken")
     mtype = ev.get("msgType")
 
-    # ---- HR 以外は一律「社員アシスタント」へ誘導（人事 channel は管理専用）----
-    if not business.is_hr(uid):
-        if mtype in ("text", "file", "image") or \
-                (mtype == "event" and ev.get("event") == "subscribe"):
-            line.reply(rt, SHAIN_REDIRECT)
+    # ---- 日次認証ゲート：HR は毎日「部门 姓名」で本人確認（HR_USERIDS 白名单は免除）----
+    bare = business._strip_prefix(uid)
+    whitelisted = uid in config.HR_USERIDS or bare in config.HR_USERIDS
+    if not (whitelisted or authlib.is_authed(CHANNEL, uid)):
+        if mtype == "text":
+            status, item = authlib.authenticate(CHANNEL, uid, ev.get("content", ""), _hr_pred)
+            _auth_reply(rt, status, item)
+        else:  # subscribe / file / image
+            line.reply(rt, T("ask_dept_name"))
         return
 
-    # ================= 以下 HR のみ =================
+    # ================= 以下 認証済み HR のみ =================
     if mtype == "event":
         if ev.get("event") == "subscribe":
             line.reply(rt, T("menu_hr"))
@@ -176,6 +203,14 @@ def _route_text(uid, text):
         return _hr_guard(uid) or _hr_missing(t)
     if any(k in t for k in ("催促", "催办", "リマインド", "提醒", "督促")):
         return _hr_guard(uid) or _hr_remind(uid, t)
+
+    # 4) メール自動校正ツール（独立 Web へのリンク）
+    if any(k in t for k in ("メール校正", "メール", "校正", "邮件校正", "邮件", "校对")):
+        url = config.MAIL_PROOFREAD_URL
+        if not url:
+            return "メール校正ツールのURLが未設定です（管理者にご連絡ください）。"
+        return ("✉️ メール自動校正ツール（社内）\n%s\n"
+                "宛先や敬語・誤字をチェックできます。" % url)
 
     return T("fallback")
 
