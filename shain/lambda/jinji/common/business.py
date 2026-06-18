@@ -235,18 +235,21 @@ def handle_registration(user_id, text):
     if link and link.get("status") == "active":
         return False, None
 
+    t = (text or "").strip()
     if not link:
         db.employees().put_item(Item={
             "userId": user_id, "status": "awaiting_id", "createdAt": _now_iso(),
         })
-        return True, i18n.T("ask_dept_name")
+        # 初回でも「部门 姓名」が来ていればその場で照合（follow の空文字なら案内のみ）
 
-    if link.get("status") in ("awaiting_id", "awaiting_name"):
-        matches = _parse_dept_name(text)
+    if (link is None) or link.get("status") in ("awaiting_id", "awaiting_name"):
+        if not t:
+            return True, i18n.T("ask_dept_name")
+        matches = _parse_dept_name(t)
         if matches is None:                       # 形式不符 → 再提示
             return True, i18n.T("ask_dept_name")
         if len(matches) == 0:
-            return True, i18n.T("not_in_roster", name=(text or "").strip())
+            return True, i18n.T("not_in_roster", name=t)
         if len(matches) > 1:
             return True, i18n.T("dup_name_id")    # 要求加社員番号消歧
         r = matches[0]
