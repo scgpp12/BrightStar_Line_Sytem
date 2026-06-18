@@ -36,6 +36,15 @@ def today_jst():
     return datetime.now(JST).strftime("%Y-%m-%d")
 
 
+def _expire_epoch():
+    """auth 行の TTL（2日後）。DynamoDB が自動削除する。"""
+    return int(datetime.now(JST).timestamp()) + 2 * 86400
+
+
+# 「本日認証」ワンタップ用キーワード（Rich Menu のボタンも同文言を送る）
+TAP_WORDS = {"認証", "认证", "本日認証", "本人確認", "本日認証する", "はい", "ok", "OK", "確認", "出勤"}
+
+
 def _norm(s):
     return re.sub(r"[\s　]+", "", (s or "")).strip()
 
@@ -99,6 +108,7 @@ def record(channel, user_id, item):
     _auth().put_item(Item={
         "pk": "%s#%s" % (channel, user_id),
         "authedDate": today_jst(),
+        "expireAt": _expire_epoch(),          # DynamoDB TTL（2日後自動削除）
         "empId": item.get("empId"),
         "name": item.get("name"),
         "department": item.get("department"),
@@ -106,6 +116,14 @@ def record(channel, user_id, item):
         "userId": user_id,
         "channel": channel,
     })
+
+
+def find_by_line(user_id):
+    """この LINE アカウントに既に紐付いた花名册エントリ（lineUserId 一致）。なければ None。"""
+    for r in _scan_roster():
+        if r.get("lineUserId") == user_id:
+            return r
+    return None
 
 
 def bind_line(emp_id, user_id):
@@ -120,27 +138,51 @@ def bind_line(emp_id, user_id):
         pass
 
 
-def authenticate(channel, user_id, text, role_pred):
-    """日次認証を試みる。
+def gate(channel, user_id, text, role_pred):
+    """日次認証ゲートの統一ロジック（一次绑定 + ワンタップ + 占用ロック）。
 
-    戻り値 (status, item|None):
-      'need_input'  … 認証入力の形でない（「部门 姓名」を促す）
-      'not_found'   … 花名册に該当なし（→人事へ）
-      'ambiguous'   … 同部門同姓名が複数（→社員番号を要求）
-      'wrong_role'  … 在籍するが当 channel の権限なし
-      'ok'          … 認証成功（item を返す。auth 記録 + lineUserId 紐付け済）
+    戻り値 (action, item|None):
+      'pass'       … 本日すでに認証済み（そのまま処理へ）
+      'ok'         … 今ここで認証成功（item を返す）
+      'tap'        … この LINE は既に紐付け済 → 「認証」タップを促す（再入力不要）
+      'need_bind'  … 未紐付け → 初回は「部门 姓名」で本人確認が必要
+      'not_found'  … 花名册に該当なし
+      'ambiguous'  … 同部門同姓名が複数（社員番号を要求）
+      'wrong_role' … 在籍するが当 channel の権限なし
+      'taken'      … その社員番号は別の LINE アカウントで登録済み（→人事へ）
     """
-    dept, name, emp_id = parse_input(text)
-    if not (emp_id or (dept and name)):
-        return ("need_input", None)
-    matches = lookup(dept, name, emp_id)
-    if len(matches) == 0:
-        return ("not_found", None)
-    if len(matches) > 1:
-        return ("ambiguous", None)
-    item = matches[0]
-    if not role_pred(item):
-        return ("wrong_role", item)
-    record(channel, user_id, item)
-    bind_line(item["empId"], user_id)
-    return ("ok", item)
+    if is_authed(channel, user_id):
+        return ("pass", None)
+
+    t = (text or "").strip()
+    bound = find_by_line(user_id)
+
+    # ① ワンタップ認証（既に紐付け済みのアカウント）
+    if t in TAP_WORDS:
+        if not bound:
+            return ("need_bind", None)
+        if not role_pred(bound):
+            return ("wrong_role", bound)
+        record(channel, user_id, bound)
+        return ("ok", bound)
+
+    # ② 「部门 姓名」での本人確認（初回紐付け or 明示再認証）
+    dept, name, emp_id = parse_input(t)
+    if emp_id or (dept and name):
+        matches = lookup(dept, name, emp_id)
+        if len(matches) == 0:
+            return ("not_found", None)
+        if len(matches) > 1:
+            return ("ambiguous", None)
+        item = matches[0]
+        existing = item.get("lineUserId")
+        if existing and existing != user_id:        # 占用ロック：別アカウントが登録済み
+            return ("taken", item)
+        if not role_pred(item):
+            return ("wrong_role", item)
+        record(channel, user_id, item)
+        bind_line(item["empId"], user_id)
+        return ("ok", item)
+
+    # ③ それ以外：紐付け済なら「タップを促す」、未紐付けなら「部门 姓名」を促す
+    return ("tap", bound) if bound else ("need_bind", None)

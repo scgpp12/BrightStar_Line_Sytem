@@ -122,6 +122,7 @@ export class BrightstarHrStack extends cdk.Stack {
       partitionKey: { name: "pk", type: dynamodb.AttributeType.STRING },
       billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
       encryption: dynamodb.TableEncryption.AWS_MANAGED,
+      timeToLiveAttribute: "expireAt",   // 認証行は2日後に自動失効・削除
       removalPolicy,
     });
 

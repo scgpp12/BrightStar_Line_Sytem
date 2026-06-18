@@ -49,18 +49,22 @@ _AUTH_WRONG = (
 )
 _AUTH_NOT_FOUND = "社員名簿に該当者が見つかりません。人事にご確認ください。\n花名册查无此人，请联系人事。"
 _AUTH_AMBIGUOUS = "同部署・同氏名が複数います。社員番号も付けてください（例：営業部 田中 E002）。"
+_AUTH_TAP = ("本日の本人確認をお願いします。メニューの「本日認証」を押すか「認証」と送信してください。\n"
+             "请进行今日本人确认：点「本日認証」或发送「認証」。")
+_AUTH_TAKEN = "この社員番号は別の LINE アカウントで登録済みです。人事にご連絡ください。\n该员工编号已绑定别的账号，请联系人事。"
 
 
 def _sales_pred(item) -> bool:
     return item.get("role") == "sales" or "営業" in (item.get("department") or "")
 
 
-def _auth_message(status: str, item) -> str:
-    if status == "ok":
+def _auth_message(action: str, item) -> str:
+    if action == "ok":
         return ("✅ 認証OK：%s（%s）\n現場の駅名を送ってください（例：東京 / 新宿）。\n"
                 "认证通过，请发送现场站名。" % (item.get("name", ""), item.get("department", "")))
     return {"wrong_role": _AUTH_WRONG, "not_found": _AUTH_NOT_FOUND,
-            "ambiguous": _AUTH_AMBIGUOUS}.get(status, _AUTH_PROMPT)
+            "ambiguous": _AUTH_AMBIGUOUS, "tap": _AUTH_TAP,
+            "taken": _AUTH_TAKEN}.get(action, _AUTH_PROMPT)
 
 _REGISTRY = StationRegistry.from_file(Path(__file__).resolve().parent / "stations.json")
 _ssm = boto3.client("ssm")
@@ -186,15 +190,15 @@ def handler(event: dict, context) -> dict:
         if not reply_token:
             continue
 
-        # --- 日次認証ゲート（営業部のみ・毎日「部门 姓名」で本人確認）---
+        # --- 日次認証ゲート（営業部のみ・初回 部门姓名 / 以降 認証ワンタップ）---
         auth_uid = ("line:" + user_id) if user_id else None
-        if not auth_uid or not authlib.is_authed(CHANNEL, auth_uid):
-            if auth_uid:
-                status, item = authlib.authenticate(CHANNEL, auth_uid, text, _sales_pred)
-            else:
-                status, item = "need_input", None
+        if auth_uid:
+            action, item = authlib.gate(CHANNEL, auth_uid, text, _sales_pred)
+        else:
+            action, item = "need_bind", None
+        if action != "pass":
             try:
-                _reply(reply_token, _auth_message(status, item))
+                _reply(reply_token, _auth_message(action, item))
             except Exception:  # noqa: BLE001
                 pass
             continue

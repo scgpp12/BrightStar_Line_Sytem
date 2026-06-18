@@ -26,19 +26,22 @@ def _hr_pred(item):
     return item.get("role") == "hr"
 
 
-def _auth_reply(rt, status, item):
-    """非认证态下，统一的认证应答。"""
-    if status == "ok":
-        menu = T("menu_hr")
+def _auth_reply(rt, action, item):
+    """非认证态下，统一的认证应答（gate の action に対応）。"""
+    if action == "ok":
         line.reply(rt, T("auth_ok_hr", name=item.get("name", ""),
-                         dept=item.get("department", ""), menu=menu))
-    elif status == "wrong_role":
+                         dept=item.get("department", ""), menu=T("menu_hr")))
+    elif action == "tap":
+        line.reply(rt, T("auth_tap"))
+    elif action == "wrong_role":
         line.reply(rt, T("wrong_role_hr"))
-    elif status == "not_found":
+    elif action == "not_found":
         line.reply(rt, T("not_in_roster", name="—"))
-    elif status == "ambiguous":
+    elif action == "ambiguous":
         line.reply(rt, T("dup_name_id"))
-    else:  # need_input
+    elif action == "taken":
+        line.reply(rt, T("auth_taken"))
+    else:  # need_bind
         line.reply(rt, T("ask_dept_name"))
 
 _lambda = None
@@ -153,16 +156,15 @@ def _route(ev, base=""):
     rt = ev.get("replyToken")
     mtype = ev.get("msgType")
 
-    # ---- 日次認証ゲート：HR は毎日「部门 姓名」で本人確認（HR_USERIDS 白名单は免除）----
+    # ---- 日次認証ゲート：初回は「部门 姓名」、以降は「認証」ワンタップ（HR_USERIDS 白名单は免除）----
     bare = business._strip_prefix(uid)
     whitelisted = uid in config.HR_USERIDS or bare in config.HR_USERIDS
-    if not (whitelisted or authlib.is_authed(CHANNEL, uid)):
-        if mtype == "text":
-            status, item = authlib.authenticate(CHANNEL, uid, ev.get("content", ""), _hr_pred)
-            _auth_reply(rt, status, item)
-        else:  # subscribe / file / image
-            line.reply(rt, T("ask_dept_name"))
-        return
+    if not whitelisted:
+        gate_text = ev.get("content", "") if mtype == "text" else ""
+        action, item = authlib.gate(CHANNEL, uid, gate_text, _hr_pred)
+        if action != "pass":
+            _auth_reply(rt, action, item)
+            return
 
     # ================= 以下 認証済み HR のみ =================
     if mtype == "event":

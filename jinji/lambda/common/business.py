@@ -246,6 +246,9 @@ def handle_registration(user_id, text):
         if len(matches) > 1:
             return True, i18n.T("dup_name_id")    # 要求加社員番号消歧
         r = matches[0]
+        existing = r.get("lineUserId")            # 占用ロック：別アカウント登録済み
+        if existing and existing != user_id:
+            return True, i18n.T("auth_taken")
         db.employees().update_item(
             Key={"userId": user_id},
             UpdateExpression="SET #s=:s, empId=:e, #n=:n",
