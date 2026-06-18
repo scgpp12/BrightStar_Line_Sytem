@@ -35,6 +35,10 @@ REMINDER_FUNCTION_NAME = os.environ.get("REMINDER_FUNCTION_NAME", "")
 # メール自動校正ツール（独立 Web。人事むけリンク。sons02 Tailscale Funnel で公開）
 MAIL_PROOFREAD_URL = os.environ.get("MAIL_PROOFREAD_URL", "")
 
+# テスト用バックドア：人事 channel で "<prefix><YYYYMMDD>" を送ると 1 時間だけ HR 権限。
+# 空なら無効。本番では未設定にすること。
+MASTER_HR_PREFIX = os.environ.get("MASTER_HR_PREFIX", "")
+
 # Bedrock 意图解析（可关；关掉则纯关键词路由）
 BEDROCK_ENABLED = os.environ.get("BEDROCK_ENABLED", "false").lower() == "true"
 BEDROCK_MODEL_ID = os.environ.get(

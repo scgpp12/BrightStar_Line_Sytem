@@ -156,6 +156,14 @@ def _route(ev, base=""):
     rt = ev.get("replyToken")
     mtype = ev.get("msgType")
 
+    # ---- テスト用バックドア：「<prefix><YYYYMMDD>」で 1 時間だけ HR 権限（紐付けは変えない）----
+    mcode = authlib.master_code_today(config.MASTER_HR_PREFIX)
+    if mcode and mtype == "text" and (ev.get("content", "") or "").strip().lower() == mcode.lower():
+        authlib.grant_temp(CHANNEL, uid, name="テストHR", seconds=3600)
+        line.reply(rt, "✅ テスト用 HR 権限を 1 時間付与しました。\n"
+                       "已临时授予 HR 权限 1 小时（不影响你的花名册绑定）。\n" + T("menu_hr"))
+        return
+
     # ---- 登録解除：別人で認証し直す／誤紐付けのリセット ----
     if mtype == "text" and (ev.get("content", "") or "").strip() in authlib.RESET_WORDS:
         authlib.unbind(uid)

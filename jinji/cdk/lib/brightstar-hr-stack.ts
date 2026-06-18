@@ -142,6 +142,7 @@ export class BrightstarHrStack extends cdk.Stack {
       LINE_SECRET_PARAM: lineSecretParam,
       LINE_TOKEN_PARAM: lineTokenParam,
       MAIL_PROOFREAD_URL: this.node.tryGetContext("mailProofreadUrl") || "",
+      MASTER_HR_PREFIX: this.node.tryGetContext("masterHrPrefix") || "",
       BEDROCK_ENABLED: "false",
       TZ: "Asia/Tokyo",
     };

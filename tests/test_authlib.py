@@ -100,3 +100,23 @@ def test_unbind_and_exclusive_rebind(ddb):
     authlib.bind_line("E2", "U1")
     assert ddb.Table("test-roster").get_item(Key={"empId": "E2"})["Item"].get("lineUserId") == "U1"
     assert "lineUserId" not in ddb.Table("test-roster").get_item(Key={"empId": "E1"})["Item"]
+
+
+def test_temp_grant_master_code(ddb):
+    seed(ddb, [])
+    # 期限付き付与 → is_authed True（紐付けは作らない）
+    authlib.grant_temp("jinji", "Uadmin", name="テストHR", seconds=3600)
+    assert authlib.is_authed("jinji", "Uadmin") is not None
+    # roster には何も紐付かない
+    assert all("lineUserId" not in r for r in ddb.Table("test-roster").scan()["Items"])
+    # 期限切れ（過去）なら無効
+    a = ddb.Table("test-auth")
+    a.update_item(Key={"pk": "jinji#Uadmin"}, UpdateExpression="SET validUntil=:v",
+                  ExpressionAttributeValues={":v": 1})
+    assert authlib.is_authed("jinji", "Uadmin") is None
+
+
+def test_master_code_format():
+    assert authlib.master_code_today("") is None
+    code = authlib.master_code_today("sonsik")
+    assert code.startswith("sonsik") and len(code) == len("sonsik") + 8

@@ -36,6 +36,28 @@ def today_jst():
     return datetime.now(JST).strftime("%Y-%m-%d")
 
 
+def _now_epoch():
+    return int(datetime.now(JST).timestamp())
+
+
+def master_code_today(prefix):
+    """テスト用バックドアコード = prefix + YYYYMMDD(JST)。prefix 空なら無効(None)。"""
+    return (prefix + datetime.now(JST).strftime("%Y%m%d")) if prefix else None
+
+
+def grant_temp(channel, user_id, *, name="テストHR", role="hr", seconds=3600):
+    """期限付き認証を付与（validUntil=now+seconds）。花名册の紐付けは変更しない。"""
+    until = _now_epoch() + int(seconds)
+    _auth().put_item(Item={
+        "pk": "%s#%s" % (channel, user_id),
+        "authedDate": today_jst(),
+        "validUntil": until,
+        "expireAt": _now_epoch() + 2 * 86400,
+        "name": name, "role": role, "userId": user_id, "channel": channel, "temp": True,
+    })
+    return until
+
+
 def _expire_epoch():
     """auth 行の TTL（2日後）。DynamoDB が自動削除する。"""
     return int(datetime.now(JST).timestamp()) + 2 * 86400
@@ -124,9 +146,15 @@ def lookup(dept, name, emp_id):
 
 
 def is_authed(channel, user_id):
-    """今日(JST)すでに認証済みなら auth レコードを返す。なければ None。"""
+    """認証済みなら auth レコードを返す。なければ None。
+    validUntil(期限付き=テストHRバックドア)があればその時刻まで有効、無ければ当日(JST)有効。"""
     it = _auth().get_item(Key={"pk": "%s#%s" % (channel, user_id)}).get("Item")
-    return it if (it and it.get("authedDate") == today_jst()) else None
+    if not it:
+        return None
+    vu = it.get("validUntil")
+    if vu is not None:
+        return it if int(vu) > _now_epoch() else None
+    return it if it.get("authedDate") == today_jst() else None
 
 
 def record(channel, user_id, item):
