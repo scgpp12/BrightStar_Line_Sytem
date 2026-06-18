@@ -15,10 +15,47 @@ import urllib.parse
 
 import boto3
 
-from common import authlib, business, config, line, messaging, s3util
+from common import assist, authlib, business, config, line, messaging, s3util
 from common.i18n import T, type_label
 
 CHANNEL = "jinji"
+
+# 多言語キーワード（英/日/韓/中）→ canonical。COMMON_INTENTS(help/auth/reset) もマージ。
+INTENTS = dict(assist.COMMON_INTENTS)
+INTENTS.update({
+    "roster_status": {"一覧", "一覧確認", "提出状況", "list", "status", "一览", "提交情况", "現況", "목록", "제출현황"},
+    "missing": {"未提出確認", "未提出", "未提出者", "missing", "未提交", "谁没交", "誰が未提出", "미제출"},
+    "remind": {"催促", "リマインド", "督促", "remind", "催办", "提醒", "독촉"},
+    "bulk_dl": {"一括DL", "一括ダウンロード", "一括", "bulkdl", "download", "打包下载", "打包", "일괄다운로드"},
+    "roster_admin": {"名簿", "社員名簿", "roster", "花名册", "员工一览", "名부", "명부"},
+    "proofread": {"メール校正", "校正", "proofread", "邮件校正", "校对", "교정"},
+})
+
+# ヘルプ項目: (説明 ja, 説明 zh, ボタン名, 送信キーワード)
+_HELP_ENTRIES = [
+    ("一覧[202606] … 全員の提出状況", "一覧[202606] … 全员提交情况", "一覧", "一覧"),
+    ("未提出確認[202606] … 未提出者", "未提出確認[202606] … 未提交者", "未提出確認", "未提出確認"),
+    ("催促[202606] … 未提出者に督促", "催促[202606] … 给未提交者发提醒", "催促", "催促"),
+    ("一括DL … 当月の提出を一括DL", "一括DL … 打包下载当月提交", "一括DL", "一括DL"),
+    ("名簿 / 社員追加 / 社員変更 / 社員削除", "名簿 / 添加 / 变更 / 删除 员工", "名簿", "名簿"),
+    ("メール校正 … メール自動校正ツール", "メール校正 … 邮件自动校正工具", "メール校正", "メール校正"),
+    ("本日認証 … 当日の本人確認", "本日認証 … 当天本人确认", "認証", "認証"),
+    ("登録解除 … 別人で登録し直す", "登録解除 … 换人重新登记", None, None),
+]
+
+
+def _help(lang):
+    title = "■ 人事メニュー（ボタンをタップで実行）" if lang == "ja" else "■ 人事菜单（点按钮即执行）"
+    return assist.help_message(lang, title, _HELP_ENTRIES)
+
+
+def _auth_ok_with_help(uid, name, dept):
+    """認証直後：言語選択を反映した認証OK + ヘルプ。"""
+    lang = assist.get_lang(CHANNEL, uid)
+    head = ("✅ 認証OK：%s（%s）" % (name, dept)) if lang == "ja" else ("✅ 认证通过：%s（%s）" % (name, dept))
+    h = _help(lang)
+    h["text"] = head + "\n\n" + h["text"]
+    return h
 
 
 def _hr_pred(item):
@@ -177,59 +214,75 @@ def _route(ev, base=""):
     if not whitelisted:
         gate_text = ev.get("content", "") if mtype == "text" else ""
         action, item = authlib.gate(CHANNEL, uid, gate_text, _hr_pred)
-        if action != "pass":
+        if action not in ("ok", "pass"):
             _auth_reply(rt, action, item)
             return
 
-    # ================= 以下 認証済み HR のみ =================
+    # ================= 認証済み HR =================
+    name = business.emp_name(uid) or ""
+
+    # ① 言語選択ワード → 設定 → 認証OK + ヘルプ（選んだ言語で）
+    if mtype == "text":
+        lw = assist.detect_lang_word(ev.get("content", ""))
+        if lw:
+            assist.set_lang(CHANNEL, uid, lw)
+            r = business.roster_of(uid) or {}
+            line.reply_messages(rt, [_auth_ok_with_help(uid, name, r.get("department", ""))])
+            return
+
+    # ② 毎日初回（認証直後 / 未選択）→ 言語チューザーを最優先で表示
+    if assist.needs_lang_today(CHANNEL, uid):
+        line.reply_messages(rt, [assist.lang_chooser(name)])
+        return
+
+    lang = assist.get_lang(CHANNEL, uid)
+
+    # ③ イベント
     if mtype == "event":
         if ev.get("event") == "subscribe":
-            line.reply(rt, T("menu_hr"))
+            line.reply_messages(rt, [_help(lang)])
         return
 
     if mtype == "text":
         t = (ev.get("content", "") or "").strip()
-        if _is_roster_cmd(t):                        # 人事一覧：未提出置顶，纯状态无链接
+        canon = assist.resolve(t, INTENTS)
+        if canon == "help":
+            line.reply_messages(rt, [_help(lang)])
+            return
+        if canon == "roster_status" or _is_roster_cmd(t):
             line.reply_messages(rt, _hr_roster_messages(business.normalize_period(t)))
             return
-        if _is_bulk_cmd(t):                          # 一括DL：打包全月提交，回一个按钮
+        if canon == "bulk_dl" or _is_bulk_cmd(t):
             line.reply_messages(rt, [_bulk_download_msg(business.normalize_period(t), base)])
             return
-        if _is_roster_admin_cmd(t):                  # 人事：花名册增删改查
+        if canon == "roster_admin" or _is_roster_admin_cmd(t):
             line.reply(rt, _handle_roster_admin(uid, ev.get("content", "")))
             return
-        # 未提出確認 / 催促 / メニュー など
-        line.reply(rt, _route_text(uid, ev.get("content", "")))
+        line.reply(rt, _route_text(uid, ev.get("content", ""), lang, canon))
         return
 
-    # HR はこの channel ではファイル提出しない（提出は社員アシスタント）
     if mtype in ("file", "image"):
-        line.reply(rt, "📄 勤怠・通勤費の提出は「社員アシスタント」をご利用ください。")
+        line.reply(rt, "📄 勤怠・通勤費の提出は「社員アシスタント」をご利用ください。\n"
+                       "考勤·通勤费的提交请用「社員アシスタント」。")
         return
 
 
-def _route_text(uid, text):
+def _route_text(uid, text, lang="ja", canon=None):
     t = (text or "").strip()
-
-    # 通用指令（テンプレ / 履歴 / 一覧 / 一括DL / pending転正 は _route で処理済）
-    if t in ("メニュー", "菜单", "menu", "help", "?", "？"):
-        return _menu(uid)
-
-    # 3) 人事指令（_route の認証ゲートを通過済み＝HR 確定。二重チェック不要）
-    if any(k in t for k in ("未提出", "未提交", "谁没交", "誰が出して", "未提出者")):
+    if canon == "help" or t in ("メニュー", "菜单", "menu", "help", "?", "？"):
+        return T("menu_hr", lang=lang)
+    if canon == "missing" or any(k in t for k in ("未提出", "未提交", "谁没交", "誰が出して", "未提出者")):
         return _hr_missing(t)
-    if any(k in t for k in ("催促", "催办", "リマインド", "提醒", "督促")):
+    if canon == "remind" or any(k in t for k in ("催促", "催办", "リマインド", "提醒", "督促")):
         return _hr_remind(uid, t)
-
-    # 4) メール自動校正ツール（独立 Web へのリンク）
-    if any(k in t for k in ("メール校正", "メール", "校正", "邮件校正", "邮件", "校对")):
+    if canon == "proofread" or any(k in t for k in ("メール校正", "メール", "校正", "邮件校正", "邮件", "校对")):
         url = config.MAIL_PROOFREAD_URL
         if not url:
             return "メール校正ツールのURLが未設定です（管理者にご連絡ください）。"
-        return ("✉️ メール自動校正ツール（社内）\n%s\n"
-                "宛先や敬語・誤字をチェックできます。" % url)
-
-    return T("fallback")
+        return (("✉️ メール自動校正ツール（社内）\n%s\n宛先や敬語・誤字をチェックできます。" % url)
+                if lang == "ja" else
+                ("✉️ 邮件自动校正工具（社内）\n%s\n可检查收件人/敬语/错字。" % url))
+    return T("fallback", lang=lang)
 
 
 # ---------------- 文件提交 ----------------
