@@ -61,8 +61,8 @@ def _sales_pred(item) -> bool:
 
 def _auth_message(action: str, item) -> str:
     if action == "ok":
-        return ("✅ 認証OK：%s（%s）\n現場の駅名を送ってください（例：東京 / 新宿）。\n"
-                "认证通过，请发送现场站名。" % (item.get("name", ""), item.get("department", "")))
+        return ("✅ 認証OK：%s（%s）\n通勤コスト比較は「検索路線：駅名」と送ってください（例：検索路線：東京）。\n"
+                "查询通勤成本请发「检索路线：站名」（例：检索路线：东京）。" % (item.get("name", ""), item.get("department", "")))
     return {"wrong_role": _AUTH_WRONG, "not_found": _AUTH_NOT_FOUND,
             "ambiguous": _AUTH_AMBIGUOUS, "tap": _AUTH_TAP,
             "taken": _AUTH_TAKEN}.get(action, _AUTH_PROMPT)
@@ -317,7 +317,7 @@ EIGYO_INTENTS.update({
 })
 
 _HELP_ENTRIES = [
-    ("現場の駅名を送る … 待機要員の通勤コスト比較", "发现场站名 … 比较待机要员通勤成本", "使い方", "ヘルプ"),
+    ("検索路線：駅名 … 待機要員の通勤コスト比較", "检索路线：站名 … 比较待机要员通勤成本", "検索例", "検索路線：東京"),
     ("要員一覧DL … 要員CSVをダウンロード→編集→送り返す", "要員一覧DL … 下载要员CSV→编辑→发回", "要員一覧DL", "要員一覧DL"),
     ("追加|社員番号|氏名|最寄駅or住所|部署|状態", "追加|工号|姓名|最寄駅或住所|部门|状态", "追加例", "追加|E007|新人|大宮|営業部|available"),
     ("変更|社員番号|最寄駅or住所|状態", "变更|工号|最寄駅或住所|状态", "変更例", "変更|E003|品川|assigned"),
@@ -415,6 +415,36 @@ def _handle_crud(verb, text):
         print("[CRUD] error:", repr(e))
         return "処理に失敗しました: %s" % type(e).__name__
     return "不明なコマンドです。"
+
+
+# 明示プレフィックス（これが付いた時だけ路線/通勤比較を実行＝誤爆防止）
+_SITE_TRIGGERS = {
+    "検索路線", "路線検索", "現場検索", "通勤比較", "現場", "比較", "検索路線駅",
+    "检索路线", "路线检索", "现场检索", "通勤比较", "现场", "比较", "路线",
+    "route", "commute", "searchroute", "search",
+}
+
+
+def _extract_site(text):
+    """「検索路線：東京」のような明示プレフィックス時のみ現場名を返す。無ければ None。"""
+    if not text:
+        return None
+    for sep in ("：", ":", "　", " "):
+        if sep in text:
+            head, _, rest = text.partition(sep)
+            if head.strip().lower().replace(" ", "") in _SITE_TRIGGERS:
+                return rest.strip() or None
+    return None
+
+
+def _no_match_hint(lang):
+    if lang == "ja":
+        return ("コマンドとして認識できませんでした。\n"
+                "・通勤コスト比較 →「検索路線：東京」のように送ってください\n"
+                "・要員の追加/変更/照会 →「ヘルプ」をご覧ください")
+    return ("未识别为命令。\n"
+            "・通勤成本比较 → 请发「检索路线：东京」\n"
+            "・要员增删改查 → 请发「帮助」")
 
 
 def handler(event: dict, context) -> dict:
@@ -547,17 +577,22 @@ def handler(event: dict, context) -> dict:
                 _r(_handle_crud(verb, text))
                 continue
 
-        # ⑦ それ以外のテキスト → 現場の通勤比較（従来）
+        # ⑦ 明示プレフィックス（検索路線：駅名）の時だけ現場の通勤比較を実行
+        site = _extract_site(text) if mtype == "text" else None
+        if not site:
+            # 駅名だけ等の自由入力は誤爆を避けるため案内のみ
+            _r(_no_match_hint(lang))
+            continue
         if user_id:
             _r(_ACK_TEXT)
             try:
                 _lambda.invoke(
                     FunctionName=context.function_name, InvocationType="Event",
-                    Payload=json.dumps({"_worker": 1, "text": text, "userId": user_id}).encode("utf-8"))
+                    Payload=json.dumps({"_worker": 1, "text": site, "userId": user_id}).encode("utf-8"))
             except Exception:  # noqa: BLE001
-                _worker_sync_fallback(reply_token, text)
+                _worker_sync_fallback(reply_token, site)
         else:
-            _worker_sync_fallback(reply_token, text)
+            _worker_sync_fallback(reply_token, site)
 
     return {"statusCode": 200, "body": "ok"}
 
