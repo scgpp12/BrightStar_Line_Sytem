@@ -190,6 +190,15 @@ def handler(event: dict, context) -> dict:
         if not reply_token:
             continue
 
+        # --- 登録解除：別人で認証し直す／誤紐付けのリセット ---
+        if user_id and text in authlib.RESET_WORDS:
+            authlib.unbind("line:" + user_id)
+            try:
+                _reply(reply_token, "認証の紐付けを解除しました。次回「営業部 お名前」で認証してください。\n已解除认证绑定。")
+            except Exception:  # noqa: BLE001
+                pass
+            continue
+
         # --- 日次認証ゲート（営業部のみ・初回 部门姓名 / 以降 認証ワンタップ）---
         auth_uid = ("line:" + user_id) if user_id else None
         if auth_uid:

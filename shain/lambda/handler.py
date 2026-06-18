@@ -139,6 +139,21 @@ def _dispatch(ev, base):
     mtype = ev.get("msgType")
     text = (ev.get("content") or "").strip()
 
+    # ---- ⓪ 登録解除（別の社員で登録し直す／誤登録のリセット）----
+    if mtype == "text" and text in authlib.RESET_WORDS:
+        authlib.unbind(uid)                       # roster.lineUserId + 認証行クリア
+        try:
+            jbiz.db.employees().delete_item(Key={"userId": uid})
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            _table().delete_item(Key={"userId": uid})   # mode セッション
+        except Exception:  # noqa: BLE001
+            pass
+        jline.reply(rt, "登録を解除しました。もう一度「所属部署 お名前」を送って登録してください。\n"
+                        "例：開発部 社員テスト\n────────\n已解除登记，请重新发「部门 姓名」登记。")
+        return
+
     # ---- ① 初回本人確認（花名册 dept+name）。未登録なら登録フローが会話を占有 ----
     emp = jbiz.get_employee(uid)
     if not (emp and emp.get("status") == "active"):
@@ -170,10 +185,11 @@ def _dispatch(ev, base):
         jinji_web._route(ev, base)
         return
 
-    # ---- ④ 当日まだモード未選択 → チューザー（日次リセット）----
+    # ---- ④ 当日まだモード未選択 → チューザー（日次リセット。氏名を冒頭に表示）----
     sess = _get_session(uid)
     if not sess or sess.get("modeDate") != today or not sess.get("mode"):
-        jline.reply(rt, CHOOSER)
+        greet = ("%s さん\n" % name) if name else ""
+        jline.reply(rt, greet + CHOOSER)
         return
 
     # ---- ⑤ 当日のモードに従って振り分け ----

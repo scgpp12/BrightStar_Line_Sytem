@@ -44,6 +44,31 @@ def _expire_epoch():
 # 「本日認証」ワンタップ用キーワード（Rich Menu のボタンも同文言を送る）
 TAP_WORDS = {"認証", "认证", "本日認証", "本人確認", "本日認証する", "はい", "ok", "OK", "確認", "出勤"}
 
+# 「登録解除 / 別人で登録し直す」キーワード（紐付けを解除して再登録できる）
+RESET_WORDS = {"登録解除", "登録変更", "別アカウント", "リセット", "解除",
+               "重新登録", "重新注册", "重新登记", "切换身份", "切換身分", "登録し直す"}
+
+CHANNELS = ("jinji", "kenshu", "eigyo", "shain")
+
+
+def unbind(user_id):
+    """この LINE アカウントの紐付けを解除する：
+    roster.lineUserId を**全エントリ**でクリア + 全 channel の認証行を削除。戻り値＝氏名 or None。"""
+    name = None
+    for r in _scan_roster():
+        if r.get("lineUserId") == user_id:
+            name = name or r.get("name")
+            try:
+                _roster().update_item(Key={"empId": r["empId"]}, UpdateExpression="REMOVE lineUserId")
+            except Exception:  # noqa: BLE001
+                pass
+    for ch in CHANNELS:
+        try:
+            _auth().delete_item(Key={"pk": "%s#%s" % (ch, user_id)})
+        except Exception:  # noqa: BLE001
+            pass
+    return name
+
 
 def _norm(s):
     return re.sub(r"[\s　]+", "", (s or "")).strip()
@@ -127,8 +152,12 @@ def find_by_line(user_id):
 
 
 def bind_line(emp_id, user_id):
-    """花名册に lineUserId を記録（存在すれば。提出突合などに使う）。"""
+    """花名册に lineUserId を排他的に記録（1人=1社員番号）。
+    同じ userId が他のエントリに付いていれば先に外す。"""
     try:
+        for r in _scan_roster():
+            if r.get("lineUserId") == user_id and r.get("empId") != emp_id:
+                _roster().update_item(Key={"empId": r["empId"]}, UpdateExpression="REMOVE lineUserId")
         _roster().update_item(
             Key={"empId": emp_id},
             UpdateExpression="SET lineUserId=:u",

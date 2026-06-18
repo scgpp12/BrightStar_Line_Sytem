@@ -63,6 +63,12 @@ def _handle_event(ev) -> str:
         return ""
     openid = business.resolve_openid(raw)
 
+    # 登録解除：別人で認証し直す／誤紐付けのリセット
+    if ev.get("msgType") == "text" and (ev.get("content") or "").strip() in authlib.RESET_WORDS:
+        authlib.unbind(raw)
+        return ("認証の紐付けを解除しました。次回「所属部署 お名前」で認証してください。\n"
+                "已解除认证绑定，下次请用「部门 姓名」认证。")
+
     # TEACHER_OPENIDS 白名单は免除
     if _is_whitelisted(openid):
         return webhook._route(ev)

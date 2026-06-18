@@ -156,6 +156,13 @@ def _route(ev, base=""):
     rt = ev.get("replyToken")
     mtype = ev.get("msgType")
 
+    # ---- 登録解除：別人で認証し直す／誤紐付けのリセット ----
+    if mtype == "text" and (ev.get("content", "") or "").strip() in authlib.RESET_WORDS:
+        authlib.unbind(uid)
+        line.reply(rt, "認証の紐付けを解除しました。次回「所属部署 お名前」で認証してください。\n"
+                       "已解除认证绑定，下次请用「部门 姓名」认证。")
+        return
+
     # ---- 日次認証ゲート：初回は「部门 姓名」、以降は「認証」ワンタップ（HR_USERIDS 白名单は免除）----
     bare = business._strip_prefix(uid)
     whitelisted = uid in config.HR_USERIDS or bare in config.HR_USERIDS

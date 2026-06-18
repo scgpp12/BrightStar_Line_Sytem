@@ -255,6 +255,11 @@ def handle_registration(user_id, text):
             ExpressionAttributeNames={"#s": "status", "#n": "name"},
             ExpressionAttributeValues={":s": "active", ":e": r["empId"], ":n": r["name"]},
         )
+        # 排他バインド（1人=1社員番号）：同 userId が他エントリに付いていれば外す
+        for other in roster_scan():
+            if other.get("lineUserId") == user_id and other.get("empId") != r["empId"]:
+                db.roster().update_item(Key={"empId": other["empId"]},
+                                        UpdateExpression="REMOVE lineUserId")
         db.roster().update_item(
             Key={"empId": r["empId"]},
             UpdateExpression="SET lineUserId=:u",

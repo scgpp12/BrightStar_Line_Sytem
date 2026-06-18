@@ -83,3 +83,20 @@ def test_teacher_role_separate_channel(ddb):
     # 同じ人でも人事 channel は role 不一致で弾く
     ddb.Table("test-auth").delete_item(Key={"pk": "kenshu#U6"})
     assert authlib.gate("jinji", "U6", "研修部 講師太郎", HR)[0] == "wrong_role"
+
+
+def test_unbind_and_exclusive_rebind(ddb):
+    seed(ddb, [
+        {"empId": "E1", "name": "孫成功", "department": "人事部", "role": "hr"},
+        {"empId": "E2", "name": "社員テスト", "department": "開発部", "role": "employee"},
+    ])
+    # U1 を E1 に紐付け
+    authlib.gate("jinji", "U1", "人事部 孫成功", HR)
+    assert ddb.Table("test-roster").get_item(Key={"empId": "E1"})["Item"].get("lineUserId") == "U1"
+    # 解除 → E1 の紐付けが消える
+    assert authlib.unbind("U1") == "孫成功"
+    assert "lineUserId" not in ddb.Table("test-roster").get_item(Key={"empId": "E1"})["Item"]
+    # 排他: U1 を E2 に付け直すと E1 には残らない（bind_line 経由）
+    authlib.bind_line("E2", "U1")
+    assert ddb.Table("test-roster").get_item(Key={"empId": "E2"})["Item"].get("lineUserId") == "U1"
+    assert "lineUserId" not in ddb.Table("test-roster").get_item(Key={"empId": "E1"})["Item"]
