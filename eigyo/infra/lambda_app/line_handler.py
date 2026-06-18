@@ -195,9 +195,15 @@ def _dl_link(base: str, key: str) -> str:
     return "%s/dl?key=%s&sig=%s" % (base, _urlparse.quote(key, safe=""), _sign_key(key))
 
 
+def _strip_quotes(s):
+    """直/弯/角の各種引用符を除去（スマートクォート対策）。"""
+    return (s or "").strip().strip('"“”「」‘’')
+
+
 def _build_staff_csv() -> str:
     buf = _io.StringIO()
-    w = _csv.writer(buf, quoting=_csv.QUOTE_MINIMAL)   # 住所のカンマは自動で引用符に
+    # 全フィールドを引用符で囲む＝住所のカンマも必ず保護、列構造が明確
+    w = _csv.writer(buf, quoting=_csv.QUOTE_ALL)
     w.writerow(_CSV_HEADER)
     for s in _repo().list():
         # address は保存していない＝空欄。住所を書けばアップロード時に最寄駅へ変換。
@@ -231,13 +237,22 @@ def _import_staff_csv(data: bytes):
     楽観ロック：各行の updated_at が現在のDBと食い違えば「他者更新」とみなし全体を拒否。
     住所(address)欄があれば最寄駅に変換（B4）。"""
     text = data.decode("utf-8-sig", "ignore")
-    rows = list(_csv.DictReader(_io.StringIO(text)))
+    rows = list(_csv.DictReader(_io.StringIO(text), restkey="_extra"))
     repo = _repo()
     current = {s.staff_id: s for s in repo.list()}
 
+    # --- フェーズ0：列ずれ検出（住所のカンマを未引用＝列数が増える）---
+    errs = []
+    good = []
+    for i, row in enumerate(rows, start=2):
+        if row.get("_extra"):
+            errs.append("%d行目: カンマで列がずれています。住所は半角\"…\"で囲むか、LINEの「追加|社員番号|氏名|住所|部署|状態」をご利用ください" % i)
+            continue
+        good.append((i, row))
+
     # --- フェーズ1：競合チェック（自分が触っていない所も含め変化が無いか）---
     conflicts = []
-    for row in rows:
+    for _, row in good:
         sid = (row.get("staff_id") or "").strip()
         up = (row.get("updated_at") or "").strip()
         if sid and sid in current and up and current[sid].updated_at != up:
@@ -246,12 +261,12 @@ def _import_staff_csv(data: bytes):
         return ("conflict", 0, conflicts)
 
     # --- フェーズ2：反映（住所→駅 変換、bulk_upsert）---
-    staffs, errs = [], []
-    for i, row in enumerate(rows, start=2):
+    staffs = []
+    for i, row in good:
         sid = (row.get("staff_id") or "").strip()
         name = (row.get("name") or "").strip()
-        station = (row.get("nearest_station") or "").strip()
-        addr = (row.get("address") or "").strip()
+        station = _strip_quotes(row.get("nearest_station"))
+        addr = _strip_quotes(row.get("address"))
         if not sid or not name:
             errs.append("%d行目: staff_id と name は必須" % i)
             continue
@@ -342,8 +357,9 @@ def _crud_verb(token):
 
 
 def _to_station(field):
-    """カンマを含めば住所とみなし最寄駅へ変換、無ければ駅名として扱う（B4）。"""
-    f = (field or "").strip()
+    """カンマを含めば住所とみなし最寄駅へ変換、無ければ駅名として扱う（B4）。
+    スマートクォートは除去。"""
+    f = _strip_quotes(field)
     if "," in f or "，" in f:
         from transit.geo import nearest_station as _ns
         return _ns(f)["station"]
