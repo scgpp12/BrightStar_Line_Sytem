@@ -46,8 +46,9 @@ CH = {
     },
     "eigyo": {
         "token": "/eki-commute/dev/line/channel-access-token",
-        "rows": 1, "cols": 1, "h": 843, "bar": "営業メニュー",
-        "btns": [("✅ 本日認証（タップ後、現場の駅名を送信）", "認証", TEAL)],
+        "rows": 1, "cols": 2, "h": 843, "bar": "営業メニュー",
+        "btns": [("✅ 本日認証\n(後で現場駅名)", "認証", TEAL),
+                 ("📋 要員リストDL\n(編集→送り返す)", "要員一覧DL", GOLD)],
     },
 }
 
