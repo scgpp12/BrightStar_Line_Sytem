@@ -190,7 +190,11 @@ def get_employee(user_id):
 
 
 def roster_of(user_id):
-    """该 LINE 用户对应的花名册条目（未绑定返回 None）。"""
+    """该 LINE 用户对应的花名册条目（未绑定返回 None）。
+    认证(roster.lineUserId)を最優先＝1人=1社員番号の正本。employees は補助。"""
+    for r in roster_scan():
+        if r.get("lineUserId") == user_id:
+            return r
     link = get_employee(user_id)
     if link and link.get("empId"):
         return roster_get(link["empId"])

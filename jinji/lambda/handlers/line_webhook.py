@@ -207,11 +207,11 @@ def _route_text(uid, text):
     if t in ("メニュー", "菜单", "menu", "help", "?", "？"):
         return _menu(uid)
 
-    # 3) 人事指令
+    # 3) 人事指令（_route の認証ゲートを通過済み＝HR 確定。二重チェック不要）
     if any(k in t for k in ("未提出", "未提交", "谁没交", "誰が出して", "未提出者")):
-        return _hr_guard(uid) or _hr_missing(t)
+        return _hr_missing(t)
     if any(k in t for k in ("催促", "催办", "リマインド", "提醒", "督促")):
-        return _hr_guard(uid) or _hr_remind(uid, t)
+        return _hr_remind(uid, t)
 
     # 4) メール自動校正ツール（独立 Web へのリンク）
     if any(k in t for k in ("メール校正", "メール", "校正", "邮件校正", "邮件", "校对")):
