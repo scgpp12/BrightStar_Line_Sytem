@@ -26,6 +26,7 @@ from pathlib import Path
 import boto3
 
 import authlib  # 全社花名册ベースの日次認証（営業部のみ）
+import assist   # 多言語キーワード / 言語設定 / Quick Reply ヘルプ
 
 from transit.registry import StationRegistry  # noqa: E402（以降の import 群と一体）
 from transit.ekitan_source import EkitanScraper
@@ -172,8 +173,9 @@ from staff.models import Staff, StaffStatus  # noqa: E402
 
 _s3 = boto3.client("s3")
 _DL_CMDS = {"要員dl", "要員一覧dl", "要員csv", "名簿dl", "名簿", "ダウンロード", "dl",
-            "要員ダウンロード", "csv", "要員リスト"}
-_CSV_HEADER = ["staff_id", "name", "nearest_station", "department", "status"]
+            "要員ダウンロード", "csv", "要員リスト", "download", "下载", "명단"}
+# updated_at は楽観ロック用の管理列（編集しないでもらう）
+_CSV_HEADER = ["staff_id", "name", "nearest_station", "address", "department", "status", "updated_at"]
 
 
 def _repo() -> DynamoDBStaffRepository:
@@ -195,10 +197,12 @@ def _dl_link(base: str, key: str) -> str:
 
 def _build_staff_csv() -> str:
     buf = _io.StringIO()
-    w = _csv.writer(buf)
+    w = _csv.writer(buf, quoting=_csv.QUOTE_MINIMAL)   # 住所のカンマは自動で引用符に
     w.writerow(_CSV_HEADER)
     for s in _repo().list():
-        w.writerow([s.staff_id, s.name, s.nearest_station, s.department or "", s.status.value])
+        # address は保存していない＝空欄。住所を書けばアップロード時に最寄駅へ変換。
+        w.writerow([s.staff_id, s.name, s.nearest_station, "",
+                    s.department or "", s.status.value, s.updated_at])
     return buf.getvalue()
 
 
@@ -221,23 +225,41 @@ def _download_content(message_id: str) -> bytes | None:
         return None
 
 
-def _import_staff_csv(data: bytes) -> tuple[int, list[str]]:
-    """CSV → StaffTable に upsert。戻り値 (反映件数, エラー行メッセージ)。"""
+def _import_staff_csv(data: bytes):
+    """CSV → StaffTable に反映。戻り値 (status, 件数, メッセージ列)。
+    status: 'ok' | 'conflict'(他者が更新済み＝再DL要求)。
+    楽観ロック：各行の updated_at が現在のDBと食い違えば「他者更新」とみなし全体を拒否。
+    住所(address)欄があれば最寄駅に変換（B4）。"""
     text = data.decode("utf-8-sig", "ignore")
     rows = list(_csv.DictReader(_io.StringIO(text)))
+    repo = _repo()
+    current = {s.staff_id: s for s in repo.list()}
+
+    # --- フェーズ1：競合チェック（自分が触っていない所も含め変化が無いか）---
+    conflicts = []
+    for row in rows:
+        sid = (row.get("staff_id") or "").strip()
+        up = (row.get("updated_at") or "").strip()
+        if sid and sid in current and up and current[sid].updated_at != up:
+            conflicts.append(sid)
+    if conflicts:
+        return ("conflict", 0, conflicts)
+
+    # --- フェーズ2：反映（住所→駅 変換、bulk_upsert）---
     staffs, errs = [], []
     for i, row in enumerate(rows, start=2):
         sid = (row.get("staff_id") or "").strip()
         name = (row.get("name") or "").strip()
         station = (row.get("nearest_station") or "").strip()
+        addr = (row.get("address") or "").strip()
         if not sid or not name:
             errs.append("%d行目: staff_id と name は必須" % i)
             continue
-        if not station and (row.get("address") or "").strip():
+        if addr:  # 住所が入っていれば最寄駅へ変換（住所自体は保存しない）
             try:
                 from transit.geo import nearest_station as _ns
-                station = _ns(row["address"].strip())["station"]
-            except Exception as e:  # noqa: BLE001
+                station = _ns(addr)["station"]
+            except Exception:  # noqa: BLE001
                 errs.append("%d行目: 住所→駅 変換失敗(%s)" % (i, sid))
                 continue
         if not station:
@@ -249,8 +271,8 @@ def _import_staff_csv(data: bytes) -> tuple[int, list[str]]:
             st = StaffStatus.AVAILABLE
         staffs.append(Staff(staff_id=sid, name=name, nearest_station=station,
                             status=st, department=(row.get("department") or "").strip() or None))
-    n = _repo().bulk_upsert(staffs) if staffs else 0
-    return n, errs
+    n = repo.bulk_upsert(staffs) if staffs else 0
+    return ("ok", n, errs)
 
 
 def _handle_dl(event: dict) -> dict:
@@ -271,6 +293,112 @@ def _base_url(event: dict) -> str:
     h = {k.lower(): v for k, v in (event.get("headers") or {}).items()}
     host = h.get("host") or (event.get("requestContext", {}) or {}).get("domainName", "")
     return "https://" + host
+
+
+# ============== 多言語キーワード / ヘルプ / 単票CRUD ==============
+EIGYO_INTENTS = dict(assist.COMMON_INTENTS)
+EIGYO_INTENTS.update({
+    "dl": set(_DL_CMDS) | {"要員リストdl", "要員一覧", "名單"},
+})
+
+_HELP_ENTRIES = [
+    ("現場の駅名を送る … 待機要員の通勤コスト比較", "发现场站名 … 比较待机要员通勤成本", "使い方", "ヘルプ"),
+    ("要員一覧DL … 要員CSVをダウンロード→編集→送り返す", "要員一覧DL … 下载要员CSV→编辑→发回", "要員一覧DL", "要員一覧DL"),
+    ("追加|社員番号|氏名|最寄駅or住所|部署|状態", "追加|工号|姓名|最寄駅或住所|部门|状态", "追加例", "追加|E007|新人|大宮|営業部|available"),
+    ("変更|社員番号|最寄駅or住所|状態", "变更|工号|最寄駅或住所|状态", "変更例", "変更|E003|品川|assigned"),
+    ("削除|社員番号 / 照会|社員番号", "删除|工号 / 查询|工号", "照会例", "照会|E003"),
+    ("本日認証 … 当日の本人確認", "本日認証 … 当天本人确认", "認証", "認証"),
+    ("登録解除 … 別人で認証し直す", "登録解除 … 换人重新认证", None, None),
+]
+
+
+def _eigyo_help(lang):
+    title = "■ 営業メニュー（ボタンをタップ）" if lang == "ja" else "■ 营业菜单（点按钮）"
+    return assist.help_message(lang, title, _HELP_ENTRIES)
+
+
+def _qr(reply_token, msg_dict):
+    """Quick Reply 等の message dict を返信。"""
+    try:
+        _line_post(_LINE_REPLY_URL, {"replyToken": reply_token, "messages": [msg_dict]})
+    except Exception:  # noqa: BLE001
+        pass
+
+
+_CRUD_VERBS = {
+    "add": {"追加", "社員追加", "要員追加", "add", "添加", "新增", "추가"},
+    "update": {"変更", "社員変更", "要員変更", "update", "修改", "변경"},
+    "delete": {"削除", "社員削除", "要員削除", "delete", "删除", "삭제"},
+    "query": {"照会", "検索", "query", "get", "查询", "查詢", "조회"},
+}
+
+
+def _crud_verb(token):
+    t = (token or "").strip().lower()
+    for v, words in _CRUD_VERBS.items():
+        if t in {w.lower() for w in words}:
+            return v
+    return None
+
+
+def _to_station(field):
+    """カンマを含めば住所とみなし最寄駅へ変換、無ければ駅名として扱う（B4）。"""
+    f = (field or "").strip()
+    if "," in f or "，" in f:
+        from transit.geo import nearest_station as _ns
+        return _ns(f)["station"]
+    return f
+
+
+def _handle_crud(verb, text):
+    parts = [p.strip() for p in text.split("|")]
+    fields = parts[1:]
+    repo = _repo()
+    try:
+        if verb == "query":
+            s = repo.get(fields[0]) if fields else None
+            if not s:
+                return "該当なし: %s" % (fields[0] if fields else "")
+            return ("■ %s %s\n部署:%s 最寄駅:%s 状態:%s\n更新:%s"
+                    % (s.staff_id, s.name, s.department or "-", s.nearest_station, s.status.value, s.updated_at))
+        if verb == "delete":
+            sid = fields[0] if fields else ""
+            if not repo.get(sid):
+                return "該当なし: %s" % sid
+            repo.delete(sid)
+            return "🗑️ 削除しました: %s" % sid
+        if verb == "add":
+            if len(fields) < 3:
+                return "形式: 追加|社員番号|氏名|最寄駅(または住所)|部署|状態"
+            sid, name, station = fields[0], fields[1], _to_station(fields[2])
+            dept = fields[3] if len(fields) > 3 and fields[3] else None
+            try:
+                stt = StaffStatus.from_str((fields[4] if len(fields) > 4 and fields[4] else "available"))
+            except ValueError:
+                stt = StaffStatus.AVAILABLE
+            repo.upsert(Staff(staff_id=sid, name=name, nearest_station=station, status=stt, department=dept))
+            return "✅ 追加/更新: %s %s（%s／%s）" % (sid, name, station, stt.value)
+        if verb == "update":
+            if not fields:
+                return "形式: 変更|社員番号|最寄駅or住所|状態|部署"
+            sid = fields[0]
+            s = repo.get(sid)
+            if not s:
+                return "該当なし: %s" % sid
+            station = _to_station(fields[1]) if len(fields) > 1 and fields[1] else s.nearest_station
+            stt = s.status
+            if len(fields) > 2 and fields[2]:
+                try:
+                    stt = StaffStatus.from_str(fields[2])
+                except ValueError:
+                    pass
+            dept = fields[3] if len(fields) > 3 and fields[3] else s.department
+            repo.upsert(Staff(staff_id=sid, name=s.name, nearest_station=station, status=stt, department=dept))
+            return "✅ 変更: %s（%s／%s）" % (sid, station, stt.value)
+    except Exception as e:  # noqa: BLE001
+        print("[CRUD] error:", repr(e))
+        return "処理に失敗しました: %s" % type(e).__name__
+    return "不明なコマンドです。"
 
 
 def handler(event: dict, context) -> dict:
@@ -329,8 +457,34 @@ def handler(event: dict, context) -> dict:
             _r(_auth_message(action, item))
             continue
 
-        # === 認証済み：分岐 ===
-        # ① CSV ファイル受信 → 要員表を更新
+        # === 認証済み ===
+        nm = (authlib.find_by_line(auth_uid) or {}).get("name", "") if auth_uid else ""
+
+        # ① 言語選択ワード → 設定 → 認証OK + ヘルプ
+        if mtype == "text":
+            lw = assist.detect_lang_word(text)
+            if lw:
+                assist.set_lang(CHANNEL, auth_uid, lw)
+                h = _eigyo_help(lw)
+                head = ("✅ 認証OK：%s" % nm) if lw == "ja" else ("✅ 认证通过：%s" % nm)
+                h["text"] = head + "\n\n" + h["text"]
+                _qr(reply_token, h)
+                continue
+
+        # ② 毎日初回（認証直後/未選択）→ 言語チューザー
+        if assist.needs_lang_today(CHANNEL, auth_uid):
+            _qr(reply_token, assist.lang_chooser(nm))
+            continue
+
+        lang = assist.get_lang(CHANNEL, auth_uid)
+        canon = assist.resolve(text, EIGYO_INTENTS) if mtype == "text" else None
+
+        # ③ ヘルプ
+        if canon == "help":
+            _qr(reply_token, _eigyo_help(lang))
+            continue
+
+        # ④ CSV ファイル受信 → 要員表更新（楽観ロックで衝突検知）
         if mtype == "file":
             if not (m.get("fileName") or "").lower().endswith(".csv"):
                 _r("要員リストの CSV ファイル(.csv)を送ってください。")
@@ -340,18 +494,23 @@ def handler(event: dict, context) -> dict:
                 _r("ファイルの取得に失敗しました。もう一度お試しください。")
                 continue
             try:
-                n, errs = _import_staff_csv(data)
+                status, n, info = _import_staff_csv(data)
             except Exception as e:  # noqa: BLE001
                 _r("CSV の解析に失敗しました: %s" % type(e).__name__)
                 continue
+            if status == "conflict":
+                _r("⚠️ データが変更されています（他の人が更新: %s）。\n"
+                   "「要員一覧DL」で最新を再ダウンロードしてから編集・アップロードしてください。\n"
+                   "数据已被他人更新，请重新下载后再修改上传。" % "、".join(info[:5]))
+                continue
             msg = "✅ 要員 %d 件を反映しました（追加・更新）。" % n
-            if errs:
-                msg += "\n⚠️ スキップ %d 件:\n" % len(errs) + "\n".join(errs[:8])
+            if info:
+                msg += "\n⚠️ スキップ %d 件:\n" % len(info) + "\n".join(info[:8])
             _r(msg)
             continue
 
-        # ② ダウンロードコマンド → CSV エクスポート + リンク
-        if text.lower() in _DL_CMDS:
+        # ⑤ ダウンロードコマンド → CSV エクスポート + リンク
+        if canon == "dl" or text.lower() in _DL_CMDS:
             try:
                 key = _export_to_s3()
                 _line_post(_LINE_REPLY_URL, {"replyToken": reply_token, "messages": [{
@@ -365,7 +524,14 @@ def handler(event: dict, context) -> dict:
                 _r("エクスポートに失敗しました: %s" % type(e).__name__)
             continue
 
-        # ③ それ以外のテキスト → 現場の通勤比較（従来）
+        # ⑥ 単票 CRUD（| 区切り：追加/変更/削除/照会）
+        if mtype == "text" and "|" in text:
+            verb = _crud_verb(text.split("|")[0])
+            if verb:
+                _r(_handle_crud(verb, text))
+                continue
+
+        # ⑦ それ以外のテキスト → 現場の通勤比較（従来）
         if user_id:
             _r(_ACK_TEXT)
             try:

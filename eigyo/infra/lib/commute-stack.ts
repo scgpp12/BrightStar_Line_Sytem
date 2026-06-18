@@ -134,6 +134,13 @@ export class CommuteStack extends cdk.Stack {
     cacheTable.grantReadWriteData(lineFn);
     dataBucket.grantReadWrite(lineFn);
     lineFn.addToRolePolicy(bedrockPolicy);
+    // 住所→最寄駅（CSV/単票CRUD で住所入力時）。Amazon Location Places はアカウントレベル。
+    lineFn.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: ["geo-places:Geocode", "geo-places:SearchText", "geo-places:SearchNearby"],
+        resources: ["*"],
+      })
+    );
 
     // 跨栈：花名册(読 + lineUserId 紐付け) + 认证表(読写)
     lineFn.addToRolePolicy(

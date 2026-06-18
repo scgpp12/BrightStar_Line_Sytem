@@ -34,7 +34,8 @@ class StaffStatus(str, Enum):
 
 
 def _now() -> str:
-    return datetime.datetime.now().isoformat(timespec="seconds")
+    # 楽観ロック(updated_at 比較)のため秒→マイクロ秒精度に（同秒内の連続更新も区別）
+    return datetime.datetime.now().isoformat(timespec="microseconds")
 
 
 @dataclass
