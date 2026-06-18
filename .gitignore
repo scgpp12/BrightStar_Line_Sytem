@@ -20,3 +20,6 @@ eigyo/infra/build/
 *.env
 .aws/
 secrets.*
+
+# 生成物
+tools/preview_*.png
