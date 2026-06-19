@@ -271,16 +271,30 @@ class EkitanScraper(TransitDataSource):
 
     @staticmethod
     def _route_summary(segs: list[dict]) -> str:
-        """lineList から「出発駅→乗換駅→…→到着駅」を組み立てる."""
-        names: list[str] = []
+        """lineList から「駅 →[路線]→ 駅 …」を組み立てる.
+
+        各区間に路線名を添え、駅間の徒歩連絡は〔徒歩〕で明示する。
+        これにより「乗換回数」と「経由駅数」が食い違う理由（=徒歩連絡は
+        乗換にカウントされないが駅名は変わる）が一目で分かる。
+        例: 西大島→[都営新宿線]→神保町→[都営三田線]→春日〔徒歩〕後楽園→[南北線]→赤羽岩淵〔徒歩〕赤羽
+        """
+        out: list[str] = []
         for i, s in enumerate(segs):
-            sf = (s.get("stationFrom") or {}).get("stationName")
-            st = (s.get("stationTo") or {}).get("stationName")
+            sf = (s.get("stationFrom") or {}).get("stationName") or ""
+            st = (s.get("stationTo") or {}).get("stationName") or ""
+            line = re.sub(r"\s+", "", s.get("lineName") or "")
             if i == 0 and sf:
-                names.append(sf)
-            if st:
-                names.append(st)
-        return "→".join(names)
+                out.append(sf)
+            if not st:
+                continue
+            if "徒歩" in line:
+                out.append("〔徒歩〕")          # 駅間の徒歩連絡（乗換にはカウントされない）
+            elif line:
+                out.append("→[%s]→" % line)    # 乗車区間（路線名つき）
+            else:
+                out.append("→")
+            out.append(st)
+        return "".join(out)
 
     # ------------------------------------------------------------------ #
     # 定期ページ解析

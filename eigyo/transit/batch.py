@@ -38,6 +38,8 @@ class StaffCommute:
     staff: Staff
     result: Optional[CommuteResult] = None
     error: Optional[str] = None
+    from_id: Optional[str] = None   # 出発駅(最寄駅)の ekitan 駅ID（確認URL組み立て用）
+    to_id: Optional[str] = None     # 到着駅(現場)の ekitan 駅ID
 
 
 def compare_site(
@@ -69,9 +71,9 @@ def compare_site(
             else:
                 result = source.query(from_id, to_id, strategy=strat)
                 memo[key] = result
-            rows.append(StaffCommute(staff=staff, result=result))
+            rows.append(StaffCommute(staff=staff, result=result, from_id=from_id, to_id=to_id))
         except TransitDataError as e:
-            rows.append(StaffCommute(staff=staff, error=str(e)))
+            rows.append(StaffCommute(staff=staff, error=str(e), to_id=to_id))
         except Exception as e:  # noqa: BLE001 - 1名の失敗で全体を止めない
             rows.append(StaffCommute(staff=staff, error=f"{type(e).__name__}: {e}"))
 
