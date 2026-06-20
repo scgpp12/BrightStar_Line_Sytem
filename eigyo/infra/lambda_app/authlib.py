@@ -95,6 +95,39 @@ def unbind(user_id):
     return name
 
 
+def mark_blocked(user_id, blocked):
+    """ユーザーが bot をブロック/削除(unfollow)/再追加(follow)した時、
+    roster の blocked フラグを更新する。lineUserId 一致のエントリに付ける。
+    戻り値＝氏名 or None（未登録の相手）。"""
+    if not user_id:
+        return None
+    name = None
+    for r in _scan_roster():
+        if r.get("lineUserId") != user_id:
+            continue
+        name = r.get("name")
+        try:
+            if blocked:
+                _roster().update_item(
+                    Key={"empId": r["empId"]},
+                    UpdateExpression="SET #b=:b, #t=:t",
+                    ExpressionAttributeNames={"#b": "blocked", "#t": "blockedAt"},
+                    ExpressionAttributeValues={":b": True, ":t": today_jst()})
+            else:
+                _roster().update_item(
+                    Key={"empId": r["empId"]},
+                    UpdateExpression="REMOVE #b, #t",
+                    ExpressionAttributeNames={"#b": "blocked", "#t": "blockedAt"})
+        except Exception:  # noqa: BLE001
+            pass
+    return name
+
+
+def list_blocked():
+    """現在ブロック中（blocked=True）の roster エントリ一覧。"""
+    return [r for r in _scan_roster() if r.get("blocked")]
+
+
 def _norm(s):
     return re.sub(r"[\s　]+", "", (s or "")).strip()
 

@@ -515,7 +515,19 @@ def handler(event: dict, context) -> dict:
 
     base = _base_url(event)
     for ev in payload.get("events", []):
-        if ev.get("type") != "message":
+        etype = ev.get("type")
+        # ブロック/削除(unfollow)・再追加(follow) を記録（返信なし）
+        if etype in ("unfollow", "follow"):
+            _uid = (ev.get("source") or {}).get("userId")
+            _au = ("line:" + _uid) if _uid else None
+            if etype == "unfollow":
+                _nm = authlib.mark_blocked(_au, True)
+                print("[UNFOLLOW] line:%s name=%s ブロック/削除" % (_uid, _nm))
+            else:
+                authlib.mark_blocked(_au, False)
+                print("[FOLLOW] line:%s 再追加" % _uid)
+            continue
+        if etype != "message":
             continue
         m = ev.get("message", {}) or {}
         mtype = m.get("type")

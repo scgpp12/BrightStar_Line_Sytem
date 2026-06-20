@@ -65,7 +65,9 @@ def parse_events(body_text: str) -> list:
                 out.append({**base, "msgType": m.get("type", "other")})
         elif etype == "follow":
             out.append({**base, "msgType": "event", "event": "subscribe"})
-        # 其它事件(unfollow/postback/join...) 暂忽略
+        elif etype == "unfollow":
+            out.append({**base, "msgType": "event", "event": "unsubscribe"})
+        # 其它事件(postback/join...) 暂忽略
     return out
 
 

@@ -87,6 +87,15 @@ def _handle_event(ev):
     raw = ev.get("fromUser")
     if not raw:
         return ""
+    # ブロック/削除(unfollow)・再追加(follow)を記録（返信なし）
+    if ev.get("msgType") == "event":
+        evt = ev.get("event")
+        if evt == "unsubscribe":
+            nm = authlib.mark_blocked(raw, True)
+            log.info("[UNFOLLOW] %s name=%s ブロック/削除", raw, nm)
+            return ""
+        if evt == "subscribe":
+            authlib.mark_blocked(raw, False)      # 再追加でブロック解除
     openid = business.resolve_openid(raw)
     text = (ev.get("content") or "").strip() if ev.get("msgType") == "text" else ""
 

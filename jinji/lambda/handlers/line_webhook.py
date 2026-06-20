@@ -193,6 +193,16 @@ def _route(ev, base=""):
     rt = ev.get("replyToken")
     mtype = ev.get("msgType")
 
+    # ---- ブロック/削除(unfollow)・再追加(follow) を記録（返信なし）----
+    if mtype == "event":
+        evt = ev.get("event")
+        if evt == "unsubscribe":
+            nm = authlib.mark_blocked(uid, True)
+            print("[UNFOLLOW] %s name=%s ブロック/削除" % (uid, nm))
+            return
+        if evt == "subscribe":
+            authlib.mark_blocked(uid, False)      # 再追加でブロック解除
+
     # ---- テスト用バックドア：「<prefix><YYYYMMDD>」で 1 時間だけ HR 権限（紐付けは変えない）----
     mcode = authlib.master_code_today(config.MASTER_HR_PREFIX)
     if mcode and mtype == "text" and (ev.get("content", "") or "").strip().lower() == mcode.lower():
@@ -367,6 +377,8 @@ def _roster_list_msg():
     lines = ["■ 社員名簿（%d名）" % len(rows)]
     for r in rows:
         linked = "✓Line" if r.get("lineUserId") else T("line_unregistered")
+        if r.get("blocked"):
+            linked += " 🚫ブロック中"
         lines.append("・%s %s（%s／%s）%s" % (
             r.get("empId", ""), r.get("name", ""), r.get("department", ""),
             r.get("role", ""), linked))

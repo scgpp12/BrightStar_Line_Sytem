@@ -169,6 +169,16 @@ def _dispatch(ev, base):
     mtype = ev.get("msgType")
     text = (ev.get("content") or "").strip()
 
+    # ---- ブロック/削除(unfollow)・再追加(follow) を記録（返信なし）----
+    if mtype == "event":
+        evt = ev.get("event")
+        if evt == "unsubscribe":
+            nm = authlib.mark_blocked(uid, True)
+            print("[UNFOLLOW] %s name=%s ブロック/削除" % (uid, nm))
+            return
+        if evt == "subscribe":
+            authlib.mark_blocked(uid, False)      # 再追加でブロック解除
+
     # ---- ⓪ 登録解除（別の社員で登録し直す／誤登録のリセット）----
     if mtype == "text" and text in authlib.RESET_WORDS:
         authlib.unbind(uid)                       # roster.lineUserId + 認証行クリア
