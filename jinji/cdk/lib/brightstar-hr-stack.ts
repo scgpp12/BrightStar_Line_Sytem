@@ -214,6 +214,53 @@ export class BrightstarHrStack extends cdk.Stack {
       ],
     });
 
+    // ---------------- 日次リコンサイル：ブロック/削除ユーザーの紐付け解除 ----------------
+    // 各 channel の access token（SSM SecureString）。userId は同一 Provider で全 channel 共通。
+    const tokenParamKenshu = `/brightstar-kenshu/${stage}/line/token`;
+    const tokenParamEigyo = `/eki-commute/${stage}/line/channel-access-token`;
+    const tokenParamShain = `/brightstar-shain/${stage}/line/token`;
+    const reconcileCron =
+      this.node.tryGetContext("reconcileCron") || "cron(0 15 * * ? *)"; // 0:00 JST（=15:00 UTC）毎日
+
+    const reconcileFn = new lambda.Function(this, "ReconcileFunction", {
+      functionName: `${prefix}-reconcile`,
+      runtime: lambda.Runtime.PYTHON_3_12,
+      architecture: lambda.Architecture.ARM_64,
+      handler: "handlers.reconcile.handler",
+      code,
+      memorySize: 256,
+      timeout: cdk.Duration.seconds(120),
+      environment: {
+        ...commonEnv,
+        TOKEN_PARAM_KENSHU: tokenParamKenshu,
+        TOKEN_PARAM_JINJI: lineTokenParam,
+        TOKEN_PARAM_EIGYO: tokenParamEigyo,
+        TOKEN_PARAM_SHAIN: tokenParamShain,
+      },
+    });
+    roster.grantReadWriteData(reconcileFn);            // lineUserId をクリア
+    auth.grantReadWriteData(reconcileFn);              // 認証行を削除
+    reconcileFn.addToRolePolicy(new iam.PolicyStatement({
+      actions: ["ssm:GetParameter"],
+      resources: [
+        `arn:aws:ssm:${this.region}:${this.account}:parameter${tokenParamKenshu}`,
+        `arn:aws:ssm:${this.region}:${this.account}:parameter${lineTokenParam}`,
+        `arn:aws:ssm:${this.region}:${this.account}:parameter${tokenParamEigyo}`,
+        `arn:aws:ssm:${this.region}:${this.account}:parameter${tokenParamShain}`,
+      ],
+    }));
+    reconcileFn.addToRolePolicy(kmsStmt);
+
+    new events.Rule(this, "ReconcileSchedule", {
+      ruleName: `${prefix}-reconcile-schedule`,
+      schedule: events.Schedule.expression(reconcileCron),
+      targets: [
+        new targets.LambdaFunction(reconcileFn, {
+          event: events.RuleTargetInput.fromObject({ trigger: "reconcile" }),
+        }),
+      ],
+    });
+
     // ---------------- 输出 ----------------
     new cdk.CfnOutput(this, "LineWebhookUrl", {
       value: fnUrl.url,
