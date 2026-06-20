@@ -542,7 +542,8 @@ def handler(event: dict, context) -> dict:
         # --- 日次認証ゲート（text/file 共通。file は text="" で判定）---
         auth_uid = ("line:" + user_id) if user_id else None
         action, item = authlib.gate(CHANNEL, auth_uid, text, _sales_pred) if auth_uid else ("need_bind", None)
-        if action != "pass":
+        # 'ok'(今ここで認証成功) は言語選択フローへ進める＝登録直後は使い方より先に言語選択を出す
+        if action not in ("pass", "ok"):
             _r(_auth_message(action, item))
             continue
 

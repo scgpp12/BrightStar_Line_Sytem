@@ -187,11 +187,13 @@ def _dispatch(ev, base):
     # ---- ① 初回本人確認（花名册 dept+name）。未登録なら登録フローが会話を占有 ----
     emp = jbiz.get_employee(uid)
     if not (emp and emp.get("status") == "active"):
-        if mtype == "text":
-            _, reply = jbiz.handle_registration(uid, text)
-            jline.reply(rt, reply or jbiz.i18n.T("ask_dept_name"))
-        else:  # subscribe / file 等
-            _, reply = jbiz.handle_registration(uid, "")
+        text_in = text if mtype == "text" else ""
+        _, reply = jbiz.handle_registration(uid, text_in)
+        emp2 = jbiz.get_employee(uid)
+        if emp2 and emp2.get("status") == "active":
+            # 登録成功直後 → 使い方より先に「言語選択」を出す（選択後にメニュー）
+            jline.reply_messages(rt, [assist.lang_chooser(emp2.get("name") or "")])
+        else:
             jline.reply(rt, reply or jbiz.i18n.T("ask_dept_name"))
         return
 
