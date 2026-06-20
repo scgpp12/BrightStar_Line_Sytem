@@ -41,13 +41,31 @@ def _token(chan):
     return _tok_cache[chan]
 
 
-def _reachable(uid_bare):
-    """いずれかの channel で profile が取れれば到達可能(=ブロックしていない)。
+def _relevant_channels(item):
+    """そのユーザーが実際に使える channel（役割/部署で判定）。
 
-    全 channel が 401/403/404 を返したときだけ False（ブロック/削除）。
+    社員(shain)は全従業員が利用可。役割別に研修(teacher)/人事(hr)/営業(sales or 営業部)を追加。
+    ※「使えない channel に届くか」は判定対象にしない（例：営業の人が研修 bot を
+      友だち追加していても研修は役割ゲートで使えないので、活きている証拠にしない）。"""
+    role = (item.get("role") or "").lower()
+    dept = item.get("department") or ""
+    chans = ["shain"]                       # 社員アシスタントは全員可
+    if role == "teacher":
+        chans.append("kenshu")
+    if role == "hr":
+        chans.append("jinji")
+    if role == "sales" or "営業" in dept:
+        chans.append("eigyo")
+    return chans
+
+
+def _reachable(uid_bare, channels):
+    """対象 channel のいずれかで profile が取れれば到達可能(=ブロックしていない)。
+
+    対象 channel が全て 401/403/404 を返したときだけ False（ブロック/削除）。
     一時障害・429/5xx 等は安全側に True（クリアしない）。"""
     saw_token = False
-    for chan in _PARAMS:
+    for chan in channels:
         tok = _token(chan)
         if not tok:
             continue
@@ -78,13 +96,15 @@ def handler(event, context):
             continue
         checked += 1
         uid = raw[5:] if raw.startswith("line:") else raw
-        if _reachable(uid):
+        chans = _relevant_channels(r)
+        if _reachable(uid, chans):
             continue
-        # 全 channel 到達不可 → ブロック/削除とみなし紐付け＋認証行をクリア
+        # 役割に対応する channel すべてで到達不可 → ブロック/削除とみなし紐付け＋認証行をクリア
         name = authlib.unbind(raw)
         cleared.append({"empId": r.get("empId"),
-                        "name": name or r.get("name"), "lineUserId": raw})
-        print("[RECONCILE] cleared empId=%s name=%s （ブロック/削除）"
-              % (r.get("empId"), name or r.get("name")))
+                        "name": name or r.get("name"),
+                        "lineUserId": raw, "channels": chans})
+        print("[RECONCILE] cleared empId=%s name=%s 対象ch=%s （ブロック/削除）"
+              % (r.get("empId"), name or r.get("name"), ",".join(chans)))
     print("[RECONCILE] done. checked=%d cleared=%d" % (checked, len(cleared)))
     return {"checked": checked, "cleared": cleared}
