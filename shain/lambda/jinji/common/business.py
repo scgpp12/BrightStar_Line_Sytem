@@ -10,6 +10,7 @@ period 形如 '202606'。
 """
 import calendar
 import re
+import unicodedata
 from datetime import datetime, timezone
 
 from boto3.dynamodb.conditions import Key
@@ -72,11 +73,20 @@ def roster_find_by_name(name):
     return [r for r in roster_scan() if (r.get("name") or "").strip() == name]
 
 
+def _name_variants(item):
+    """本名 + 別名/読み(aliases) の正規化集合。中文(簡/繁)・かな・ハングル・ローマ字対応。"""
+    vals = [item.get("name")]
+    al = item.get("aliases")
+    if al:
+        vals += re.split(r"[,，、|;；/\s　]+", al)
+    return {_norm_name(v) for v in vals if v}
+
+
 def roster_find_by_dept_name(dept, name):
-    """部门+姓名 同时匹配（去空白）。重名靠部门区分。"""
+    """部门+姓名 同时匹配（去空白／表記ゆれ吸収／別名対応）。重名靠部门区分。"""
     dn, nn = _norm_name(dept), _norm_name(name)
     return [r for r in roster_scan()
-            if _norm_name(r.get("name")) == nn and _norm_name(r.get("department")) == dn]
+            if nn in _name_variants(r) and _norm_name(r.get("department")) == dn]
 
 
 def _parse_dept_name(text):
@@ -148,6 +158,9 @@ _FIELD_ALIAS = {
     "dept": "department", "department": "department", "部署": "department",
     "部门": "department", "所属": "department",
     "role": "role", "役割": "role", "角色": "role",
+    "aliases": "aliases", "alias": "aliases", "別名": "aliases", "别名": "aliases",
+    "カナ": "aliases", "かな": "aliases", "フリガナ": "aliases", "ふりがな": "aliases",
+    "読み": "aliases", "読み方": "aliases", "读音": "aliases", "yomi": "aliases", "別称": "aliases",
 }
 
 
@@ -304,7 +317,10 @@ def check_file_period(type_, data, period):
 
 
 def _norm_name(s):
-    return re.sub(r"\s+", "", (s or "").replace("　", "")).strip()
+    """表記ゆれ吸収：NFKC(全/半角)＋空白除去＋小文字化＋カタカナ→ひらがな。"""
+    s = unicodedata.normalize("NFKC", s or "")
+    s = re.sub(r"[\s　]+", "", s).strip().lower()
+    return "".join(chr(ord(c) - 0x60) if "ァ" <= c <= "ヶ" else c for c in s)
 
 
 def check_name(type_, data, user_id):

@@ -9,6 +9,7 @@
 """
 import os
 import re
+import unicodedata
 from datetime import datetime, timedelta, timezone
 
 import boto3
@@ -129,7 +130,22 @@ def list_blocked():
 
 
 def _norm(s):
-    return re.sub(r"[\s　]+", "", (s or "")).strip()
+    """姓名/部署の表記ゆれ吸収：NFKC(全/半角)＋空白除去＋小文字化＋カタカナ→ひらがな。
+    これで『ソンセイコウ』『そんせいこう』、全角/半角、ローマ字の大小は同一視できる。"""
+    s = unicodedata.normalize("NFKC", s or "")
+    s = re.sub(r"[\s　]+", "", s).strip().lower()
+    return "".join(chr(ord(c) - 0x60) if "ァ" <= c <= "ヶ" else c for c in s)
+
+
+def _name_variants(item):
+    """本人の氏名表記候補（本名 ＋ 別名/読み aliases）を正規化集合で返す。
+    aliases は花名册の任意項目（『孫成功,ソンセイコウ』等。区切りはカンマ/読点/空白/|）。
+    中文(簡/繁)・日本語かな・ハングル・ローマ字いずれも alias に入れれば一致する。"""
+    vals = [item.get("name")]
+    al = item.get("aliases")
+    if al:
+        vals += re.split(r"[,，、|;；/\s　]+", al)
+    return {_norm(v) for v in vals if v}
 
 
 def _scan_roster():
@@ -169,14 +185,14 @@ def lookup(dept, name, emp_id):
         it = _roster_get(emp_id)
         if not it:
             return []
-        if name and _norm(it.get("name")) != _norm(name):
+        if name and _norm(name) not in _name_variants(it):
             return []
         if dept and _norm(it.get("department")) != _norm(dept):
             return []
         return [it]
     if dept and name:
         return [r for r in _scan_roster()
-                if _norm(r.get("name")) == _norm(name)
+                if _norm(name) in _name_variants(r)
                 and _norm(r.get("department")) == _norm(dept)]
     return []
 
