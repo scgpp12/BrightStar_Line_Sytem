@@ -31,8 +31,6 @@ export class BrightstarHrStack extends cdk.Stack {
     cdk.Tags.of(this).add("ManagedBy", "cdk");
     cdk.Tags.of(this).add("Stage", stage);
 
-    const reminderCron =
-      this.node.tryGetContext("reminderCron") || "cron(0 0 25,28 * ? *)";
     const hrUserIds = this.node.tryGetContext("hrUserIds") || "";
 
     // SSM 参数名（值为 SecureString，部署外单独写入，不入 git）
@@ -147,26 +145,16 @@ export class BrightstarHrStack extends cdk.Stack {
       TZ: "Asia/Tokyo",
     };
 
-    const reminderFn = new lambda.Function(this, "ReminderFunction", {
-      functionName: `${prefix}-reminder`,
-      runtime: lambda.Runtime.PYTHON_3_12,
-      architecture: lambda.Architecture.ARM_64,
-      handler: "handlers.reminder.handler",
-      code,
-      memorySize: 256,
-      timeout: cdk.Duration.seconds(60),
-      environment: commonEnv,
-    });
-
+    // 勤怠・通勤費の催促(reminder)は総務(soumu)へ移管したため、本栈は webhook のみ。
     const webhookFn = new lambda.Function(this, "WebhookFunction", {
       functionName: `${prefix}-webhook`,
       runtime: lambda.Runtime.PYTHON_3_12,
       architecture: lambda.Architecture.ARM_64,
       handler: "handlers.line_webhook.handler",
       code,
-      memorySize: 512,                                 // 打包 zip 需要内存余量
-      timeout: cdk.Duration.seconds(29),               // 含一括DL 打包
-      environment: { ...commonEnv, REMINDER_FUNCTION_NAME: reminderFn.functionName },
+      memorySize: 256,
+      timeout: cdk.Duration.seconds(29),
+      environment: commonEnv,
     });
 
     // ---------------- 权限（最小化） ----------------
@@ -175,10 +163,6 @@ export class BrightstarHrStack extends cdk.Stack {
     submissions.grantReadWriteData(webhookFn);
     auth.grantReadWriteData(webhookFn);                // 日次認証状態
     bucket.grantReadWrite(webhookFn);
-    employees.grantReadData(reminderFn);
-    roster.grantReadData(reminderFn);
-    submissions.grantReadData(reminderFn);
-    reminderFn.grantInvoke(webhookFn);
 
     // 读 SSM SecureString（两个参数）+ 经 SSM 调用的 KMS 解密
     const ssmStmt = new iam.PolicyStatement({
@@ -195,30 +179,19 @@ export class BrightstarHrStack extends cdk.Stack {
     });
     webhookFn.addToRolePolicy(ssmStmt);
     webhookFn.addToRolePolicy(kmsStmt);
-    reminderFn.addToRolePolicy(ssmStmt);
-    reminderFn.addToRolePolicy(kmsStmt);
 
     // ---------------- Function URL（LINE webhook 入口） ----------------
     const fnUrl = webhookFn.addFunctionUrl({
       authType: lambda.FunctionUrlAuthType.NONE,
     });
 
-    // ---------------- EventBridge 定时提醒 ----------------
-    new events.Rule(this, "ReminderSchedule", {
-      ruleName: `${prefix}-reminder-schedule`,
-      schedule: events.Schedule.expression(reminderCron),
-      targets: [
-        new targets.LambdaFunction(reminderFn, {
-          event: events.RuleTargetInput.fromObject({ trigger: "schedule" }),
-        }),
-      ],
-    });
-
     // ---------------- 日次リコンサイル：ブロック/削除ユーザーの紐付け解除 ----------------
+    // （勤怠・通勤費の催促 reminder は総務(soumu)栈へ移管。本栈の定時は reconcile のみ）
     // 各 channel の access token（SSM SecureString）。userId は同一 Provider で全 channel 共通。
     const tokenParamKenshu = `/brightstar-kenshu/${stage}/line/token`;
     const tokenParamEigyo = `/eki-commute/${stage}/line/channel-access-token`;
     const tokenParamShain = `/brightstar-shain/${stage}/line/token`;
+    const tokenParamSoumu = `/brightstar-soumu/${stage}/line/token`;
     const reconcileCron =
       this.node.tryGetContext("reconcileCron") || "cron(0 15 * * ? *)"; // 0:00 JST（=15:00 UTC）毎日
 
@@ -236,6 +209,7 @@ export class BrightstarHrStack extends cdk.Stack {
         TOKEN_PARAM_JINJI: lineTokenParam,
         TOKEN_PARAM_EIGYO: tokenParamEigyo,
         TOKEN_PARAM_SHAIN: tokenParamShain,
+        TOKEN_PARAM_SOUMU: tokenParamSoumu,
       },
     });
     roster.grantReadWriteData(reconcileFn);            // lineUserId をクリア
@@ -247,6 +221,7 @@ export class BrightstarHrStack extends cdk.Stack {
         `arn:aws:ssm:${this.region}:${this.account}:parameter${lineTokenParam}`,
         `arn:aws:ssm:${this.region}:${this.account}:parameter${tokenParamEigyo}`,
         `arn:aws:ssm:${this.region}:${this.account}:parameter${tokenParamShain}`,
+        `arn:aws:ssm:${this.region}:${this.account}:parameter${tokenParamSoumu}`,
       ],
     }));
     reconcileFn.addToRolePolicy(kmsStmt);

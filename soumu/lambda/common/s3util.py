@@ -1,9 +1,9 @@
 """S3 提交物存取 + 预签名 URL。
 
 布局（用户规格）：
-  hr/{yyyy}/{mm}/worktimes/作業時間記録簿（{姓名}）_{YYYYMM}.xlsx        (kintai)
-  hr/{yyyy}/{mm}/expenses/交通費経費申請表【{YYYY}年{MM}月{姓名}】.xlsx   (commute)
-  hr/template/作業時間記録簿.xlsx / hr/template/交通費経費申請表.xlsx     (空白样式)
+  hr/{yyyy}/{mm}/worktimes/作業時間記録簿（{姓名}）_{YYYYMM}.xlsx   (kintai)
+  hr/{yyyy}/{mm}/expenses/経費（{姓名}）_{YYYYMM}.xlsx              (commute)
+  hr/template/作業時間記録簿.xlsx / hr/template/経費.xlsx           (空白样式)
 提交对象统一打标签 lifecycle=managed（生命周期规则按此标签归档/删除，模板不受影响）。
 桶开版本管理 → 允许重复提交，旧版本保留。
 """
@@ -20,40 +20,12 @@ _s3 = boto3.client("s3", region_name=config.REGION)
 XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 SUBMISSION_TAG = "lifecycle=managed"
 
-MIME_BY_EXT = {
-    "xlsx": XLSX_MIME, "pdf": "application/pdf",
-    "jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png",
-    "zip": "application/zip", "bin": "application/octet-stream",
-}
-
-
-def detect_format(data):
-    """バイト先頭からファイル種別を推定 → (ext, mime)。xlsx(zip)/pdf/jpg/png。"""
-    b = data or b""
-    if b[:4] == b"PK\x03\x04":
-        return "xlsx", XLSX_MIME
-    if b[:4] == b"%PDF":
-        return "pdf", "application/pdf"
-    if b[:3] == b"\xff\xd8\xff":
-        return "jpg", "image/jpeg"
-    if b[:8] == b"\x89PNG\r\n\x1a\n":
-        return "png", "image/png"
-    return "bin", "application/octet-stream"
-
-
-def content_type_for(key):
-    ext = key.rsplit(".", 1)[-1].lower() if "." in key else ""
-    return MIME_BY_EXT.get(ext, XLSX_MIME)
-
 # 类型 → 目录 / 显示名 / 模板 key
 TYPE_META = {
     "kintai":  {"folder": "worktimes", "label": "作業時間記録簿",
                 "template": "hr/template/作業時間記録簿.xlsx", "ascii": "kintai.xlsx"},
-    "commute": {"folder": "expenses",  "label": "交通費経費申請表",
-                "template": "hr/template/交通費経費申請表.xlsx", "ascii": "kotsuhi.xlsx",
-                "template_name": "交通費経費申請表【XX年XX月申請人(漢字)】.xlsx"},
-    "other":   {"folder": "others",    "label": "その他経費",
-                "template": "", "ascii": "other"},
+    "commute": {"folder": "expenses",  "label": "経費",
+                "template": "hr/template/経費.xlsx", "ascii": "keihi.xlsx"},
 }
 
 
@@ -68,42 +40,23 @@ def _safe(part):
     return (part or "").replace(":", "_").replace("/", "_").strip()
 
 
-def submission_filename(period, type_, name, ext="xlsx"):
+def submission_filename(period, type_, name):
     meta = TYPE_META[type_]
-    nm = _safe(name) or "noname"
-    if type_ == "commute":
-        # 交通費経費申請表【YYYY年MM月+氏名】.{ext}
-        return "交通費経費申請表【%s年%s月%s】.%s" % (period[:4], period[4:], nm, ext)
-    return "%s（%s）_%s.%s" % (meta["label"], nm, period, ext)
+    return "%s（%s）_%s.xlsx" % (meta["label"], _safe(name) or "noname", period)
 
 
-def submission_key(period, type_, name, ext="xlsx"):
+def submission_key(period, type_, name):
     yyyy, mm = period[:4], period[4:]
     meta = TYPE_META[type_]
     return "hr/%s/%s/%s/%s" % (yyyy, mm, meta["folder"],
-                               submission_filename(period, type_, name, ext))
+                               submission_filename(period, type_, name))
 
 
-def put_submission(period, type_, name, data, ext="xlsx", mime=None):
-    """存入提交物（带类型 + 生命周期标签），返回 (key, filename)。
-    ext/mime 支持 xlsx 以外（PDF/画像）。"""
-    key = submission_key(period, type_, name, ext)
+def put_submission(period, type_, name, data):
+    """存入提交物（带类型 + 生命周期标签），返回 (key, filename)。"""
+    key = submission_key(period, type_, name)
     _s3.put_object(Bucket=config.BUCKET_NAME, Key=key, Body=data,
-                   ContentType=mime or XLSX_MIME, Tagging=SUBMISSION_TAG)
-    return key, key.rsplit("/", 1)[-1]
-
-
-def other_key(period, name, purpose, ext, ts):
-    """その他経費：hr/{yyyy}/{mm}/others/{用途}_{氏名}_{period}_{ts}.{ext}（月内複数可）。"""
-    yyyy, mm = period[:4], period[4:]
-    stem = "%s_%s_%s_%s" % (_safe(purpose) or "その他", _safe(name) or "noname", period, ts)
-    return "hr/%s/%s/others/%s.%s" % (yyyy, mm, stem, ext)
-
-
-def put_other(period, name, purpose, data, ext, mime, ts):
-    key = other_key(period, name, purpose, ext, ts)
-    _s3.put_object(Bucket=config.BUCKET_NAME, Key=key, Body=data,
-                   ContentType=mime or "application/octet-stream", Tagging=SUBMISSION_TAG)
+                   ContentType=XLSX_MIME, Tagging=SUBMISSION_TAG)
     return key, key.rsplit("/", 1)[-1]
 
 
@@ -127,9 +80,8 @@ def presign_template(type_):
     meta = TYPE_META.get(type_)
     if not meta:
         return ""
-    download_name = meta.get("template_name") or ("%s.xlsx" % meta["label"])
     return presign_get(meta["template"],
-                       download_name=download_name, ascii_name=meta["ascii"])
+                       download_name="%s.xlsx" % meta["label"], ascii_name=meta["ascii"])
 
 
 # --- 待分类暂存（用户发了文件但还没说是哪类） ---

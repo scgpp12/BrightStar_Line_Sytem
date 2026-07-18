@@ -23,6 +23,7 @@ _PARAMS = {
     "jinji": os.environ.get("TOKEN_PARAM_JINJI", ""),
     "eigyo": os.environ.get("TOKEN_PARAM_EIGYO", ""),
     "shain": os.environ.get("TOKEN_PARAM_SHAIN", ""),
+    "soumu": os.environ.get("TOKEN_PARAM_SOUMU", ""),
 }
 _tok_cache: dict = {}
 
@@ -44,7 +45,8 @@ def _token(chan):
 def _relevant_channels(item):
     """そのユーザーが実際に使える channel（役割/部署で判定）。
 
-    社員(shain)は全従業員が利用可。役割別に研修(teacher)/人事(hr)/営業(sales or 営業部)を追加。
+    社員(shain)は全従業員が利用可。役割別に研修(teacher)/人事(hr)/営業(sales or 営業部)/
+    総務(soumu or 総務部)を追加。
     ※「使えない channel に届くか」は判定対象にしない（例：営業の人が研修 bot を
       友だち追加していても研修は役割ゲートで使えないので、活きている証拠にしない）。"""
     role = (item.get("role") or "").lower()
@@ -56,6 +58,8 @@ def _relevant_channels(item):
         chans.append("jinji")
     if role == "sales" or "営業" in dept:
         chans.append("eigyo")
+    if role in ("hr", "soumu") or "総務" in dept:
+        chans.append("soumu")
     return chans
 
 

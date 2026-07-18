@@ -15,13 +15,11 @@ from datetime import datetime, timezone
 
 from boto3.dynamodb.conditions import Key
 
-from . import config, db, i18n, jpholiday, s3util, xlsx, zhconv
+from . import config, db, i18n, jpholiday, s3util, xlsx
 
 # 内容チェック対象セル
-# commute(交通費経費申請表) は第一シート＝交通費: 年月=B1(日付), 氏名=D6「氏名：◯◯」
-# kintai(作業時間記録簿): 年月=B5, 氏名=B3
-PERIOD_CELL = {"kintai": "B5", "commute": "B1"}   # 年月
-NAME_CELL = {"kintai": "B3", "commute": "D6"}      # 氏名
+PERIOD_CELL = {"kintai": "B5", "commute": "A1"}   # 年月
+NAME_CELL = {"kintai": "B3"}                       # 氏名（勤務表のみ）
 _WD = "月火水木金土日"
 
 # ---------------- 时间 ----------------
@@ -319,99 +317,23 @@ def check_file_period(type_, data, period):
 
 
 def _norm_name(s):
-    """表記ゆれ吸収：NFKC(全/半角)＋空白除去＋小文字化＋カタカナ→ひらがな
-    ＋簡体/繁体・日本漢字の統一（孫成功＝孙成功）。中国籍要員の簡繁差を吸収する。"""
+    """表記ゆれ吸収：NFKC(全/半角)＋空白除去＋小文字化＋カタカナ→ひらがな。"""
     s = unicodedata.normalize("NFKC", s or "")
     s = re.sub(r"[\s　]+", "", s).strip().lower()
-    s = "".join(chr(ord(c) - 0x60) if "ァ" <= c <= "ヶ" else c for c in s)
-    # 簡繁/字体ゆれの統一：いずれも簡体へ畳んで比較（繁体「孫」も簡体「孙」も同一視）
-    try:
-        s = zhconv.convert(s, "zh-hans")
-    except Exception:  # noqa: BLE001  辞書未ロード等でも氏名比較は継続
-        pass
-    return s
-
-
-def _extract_name(type_, raw):
-    """セルから氏名を取り出す。
-    commute(交通費 D6) は「氏名：◯◯（漢字で記入…）」形式 → ラベルと括弧注記を除去。
-    kintai(B3) はセル値そのまま。"""
-    if raw is None:
-        return None
-    s = str(raw)
-    if type_ == "commute":
-        m = re.search(r"氏\s*名\s*[:：]\s*(.+)", s, re.S)
-        if m:
-            s = m.group(1)
-        s = re.split(r"[（(]", s)[0]      # 「（漢字で記入…）」等の注記を除去
-    return s.strip().strip("　")
+    return "".join(chr(ord(c) - 0x60) if "ァ" <= c <= "ヶ" else c for c in s)
 
 
 def check_name(type_, data, user_id):
-    """提出ファイルの氏名セルが登録氏名と一致するか。返り値 (ok, found_name)。
-    対象外の種別は常に ok。commute は D6「氏名：◯◯」, kintai は B3。"""
+    """勤務表 B3 の氏名が登録氏名と一致するか。返り値 (ok, found_name)。
+    対象外の種別は常に ok。"""
     ref = NAME_CELL.get(type_)
     if not ref:
         return True, None
-    found = _extract_name(type_, xlsx.read_cell(data, ref))
+    found = xlsx.read_cell(data, ref)
     want = emp_name(user_id)
     if not found or not want:
         return False, found
     return (_norm_name(found) == _norm_name(want)), found
-
-
-def _value_after_label(raw, label):
-    """「label：◯◯」形式から ◯◯ を取り出す。ラベルが無ければ全体（前後空白除去）。"""
-    if raw is None:
-        return ""
-    s = str(raw)
-    m = re.search(label + r"\s*[:：]\s*(.+)", s, re.S)
-    if m:
-        s = m.group(1)
-    return s.strip().strip("　")
-
-
-# 交通費 提出の追加チェック対象（第一シート=交通費）
-COMMUTE_SUPERVISOR_CELL = "D7"          # 責任者氏名「責任者氏名：◯◯」
-COMMUTE_STATUS_RANGE = range(11, 42)    # 出勤状態 D11〜D41
-
-
-def commute_supervisor_missing(data):
-    """責任者氏名(D7) が未記入 or 初期文字「（本社メンバーの名前）」か。
-    ハードエラーにはせず、提出は許可。定期券購入時の必須リマインドに使う。"""
-    sup = _value_after_label(xlsx.read_cell(data, COMMUTE_SUPERVISOR_CELL), "責任者氏名")
-    sup_core = re.sub(r"^[（(](.*)[）)]$", r"\1", sup).strip()   # 括弧だけのプレースホルダ除去
-    return (not sup_core) or ("本社メンバー" in sup)
-
-
-def commute_status_missing_days(data):
-    """出勤状態(D) が未記入の「日」を返す。
-    A列に日付がある行(=その月の実在日)のみ対象。月末を超えた空行(日付なし)は除外するので、
-    30日月・2月でも誤検知しない。全日に 出勤/休み/在宅 等の記入を必須とする。"""
-    m = xlsx.cell_map(data)
-    miss = []
-    for r in COMMUTE_STATUS_RANGE:
-        d = xlsx.to_date(m.get("A%d" % r))
-        if d is None:                       # 月末超過行（日付なし）はスキップ
-            continue
-        if not (m.get("D%d" % r) or "").strip():
-            miss.append(d.day)
-    return sorted(set(miss))
-
-
-def commute_errors(data):
-    """交通費(commute) のハードチェック。(i18nキー, フォーマット引数) のリストを返す（空＝OK・保存可）。
-    ① 出勤状態(D) が未記入の日がある（A列に日付がある行は全て記入必須）→ エラー
-    ② ⑤本人確認チェックボックス未チェック → エラー
-    ※ 責任者氏名は「定期券購入時の必須リマインド」に変更（commute_supervisor_missing）。"""
-    errs = []
-    miss = commute_status_missing_days(data)
-    if miss:
-        days = "、".join("%d日" % d for d in miss)
-        errs.append(("commute_status_empty", {"days": days}))
-    if not xlsx.form_checkbox_checked(data):
-        errs.append(("commute_confirm_unchecked", {}))
-    return errs
 
 
 def _fmt_day(d):
@@ -483,7 +405,7 @@ def is_late_resubmit(period):
     return current_period() > period
 
 
-def record_submission(user_id, type_, period, s3_key, file_name, fmt="xlsx"):
+def record_submission(user_id, type_, period, s3_key, file_name):
     pk_gsi = "%s#%s" % (period, type_)
     db.submissions().put_item(Item={
         "userId": user_id,
@@ -494,89 +416,17 @@ def record_submission(user_id, type_, period, s3_key, file_name, fmt="xlsx"):
         "type": type_,
         "s3Key": s3_key,
         "fileName": file_name or "",
-        "format": fmt,
         "submittedAt": _now_iso(),
     })
 
 
-def save_submission(user_id, type_, data, period=None, ext="xlsx", mime=None):
-    """存提交物（允许重复提交，支持 xlsx 以外 PDF/画像）。返回 (period, key, resubmit)。"""
+def save_submission(user_id, type_, data, period=None):
+    """存提交物（允许重复提交）。返回 (period, key, resubmit)。"""
     period = period or current_period()
     resubmit = _has_submission(user_id, period, type_)
-    key, fname = s3util.put_submission(period, type_, emp_name(user_id), data, ext, mime)
-    record_submission(user_id, type_, period, key, fname, fmt=ext)
+    key, fname = s3util.put_submission(period, type_, emp_name(user_id), data)
+    record_submission(user_id, type_, period, key, fname)
     return period, key, resubmit
-
-
-# ---------------- その他経費（用途つき・月内複数可・内容チェックなし） ----------------
-
-def set_other_mode(user_id, step, purpose=None):
-    expr, vals = "SET otherStep=:s", {":s": step}
-    if purpose is not None:
-        expr += ", otherPurpose=:p"
-        vals[":p"] = purpose
-    db.employees().update_item(Key={"userId": user_id},
-                               UpdateExpression=expr, ExpressionAttributeValues=vals)
-
-
-def get_other_mode(user_id):
-    e = get_employee(user_id)
-    if e and e.get("otherStep"):
-        return {"step": e["otherStep"], "purpose": e.get("otherPurpose", "")}
-    return None
-
-
-def clear_other_mode(user_id):
-    e = get_employee(user_id)
-    if e and (e.get("otherStep") or e.get("otherPurpose")):
-        db.employees().update_item(Key={"userId": user_id},
-                                   UpdateExpression="REMOVE otherStep, otherPurpose")
-
-
-def record_other_submission(user_id, period, s3_key, file_name, purpose, fmt, ts):
-    db.submissions().put_item(Item={
-        "userId": user_id,
-        "sk": "%s#other#%s" % (period, ts),
-        "gsi1pk": "%s#other" % period,
-        "gsi1sk": user_id,
-        "period": period,
-        "type": "other",
-        "purpose": purpose or "",
-        "s3Key": s3_key,
-        "fileName": file_name or "",
-        "format": fmt,
-        "submittedAt": _now_iso(),
-    })
-
-
-def save_other_submission(user_id, data, ext, mime, purpose, period=None):
-    """存その他経費（用途つき、月内複数可）。返回 (period, key)。"""
-    import time
-    period = period or current_period()
-    ts = str(int(time.time() * 1000))
-    key, fname = s3util.put_other(period, emp_name(user_id), purpose, data, ext, mime, ts)
-    record_other_submission(user_id, period, key, fname, purpose, ext, ts)
-    return period, key
-
-
-# ---------------- 提出予定タイプ（「勤怠提出／経費提出」ボタン → 次のファイルの種別） ----------------
-
-def set_expect_type(user_id, type_):
-    db.employees().update_item(
-        Key={"userId": user_id},
-        UpdateExpression="SET expectType=:t", ExpressionAttributeValues={":t": type_})
-
-
-def get_expect_type(user_id):
-    e = get_employee(user_id)
-    return e.get("expectType") if e else None
-
-
-def clear_expect_type(user_id):
-    e = get_employee(user_id)
-    if e and e.get("expectType"):
-        db.employees().update_item(Key={"userId": user_id},
-                                   UpdateExpression="REMOVE expectType")
 
 
 # ---------------- 待分类暂存 ----------------
@@ -635,7 +485,92 @@ def submitters(period, type_):
     return ids
 
 
-def _submitted(person, done_ids):
+# ---------------- 催促予約（日時ピッカーで登録 → 10分間隔ポーラーが実行） ----------------
+
+def booking_add(dt_str, created_by="", period=""):
+    """dt_str='YYYY-MM-DDThh:mm'（JST）。period 空＝実行時の当月。返り値 (bookingId, dt_str)。"""
+    import uuid
+    from datetime import datetime, timezone, timedelta
+    jst = timezone(timedelta(hours=9))
+    dt = datetime.strptime(dt_str, "%Y-%m-%dT%H:%M").replace(tzinfo=jst)
+    bid = uuid.uuid4().hex[:6]
+    db.bookings().put_item(Item={
+        "bookingId": bid,
+        "runAtEpoch": int(dt.timestamp()),
+        "runAtJst": dt_str.replace("T", " "),
+        "period": period or "",
+        "status": "pending",
+        "createdBy": created_by or "",
+        "createdAt": _now_iso(),
+    })
+    return bid, dt_str
+
+
+def bookings_pending():
+    items, kwargs = [], {}
+    while True:
+        r = db.bookings().scan(**kwargs)
+        items += [i for i in r.get("Items", []) if i.get("status") == "pending"]
+        if "LastEvaluatedKey" not in r:
+            break
+        kwargs["ExclusiveStartKey"] = r["LastEvaluatedKey"]
+    return sorted(items, key=lambda x: int(x.get("runAtEpoch", 0)))
+
+
+def bookings_due(now_epoch):
+    return [b for b in bookings_pending() if int(b.get("runAtEpoch", 0)) <= now_epoch]
+
+
+def booking_mark(bid, status):
+    db.bookings().update_item(
+        Key={"bookingId": bid},
+        UpdateExpression="SET #s=:s, doneAt=:d",
+        ExpressionAttributeNames={"#s": "status"},
+        ExpressionAttributeValues={":s": status, ":d": _now_iso()})
+
+
+def booking_cancel(bid):
+    b = db.bookings().get_item(Key={"bookingId": bid}).get("Item")
+    if not b or b.get("status") != "pending":
+        return None
+    booking_mark(bid, "cancelled")
+    return b
+
+
+def manual_ok(person, period, type_):
+    """手動「済」フラグ（メール等で受領済み）。roster.manualOk['{period}#{type}']"""
+    return (person.get("manualOk") or {}).get("%s#%s" % (period, type_))
+
+
+def manual_ok_set(emp_id, period, type_, by_name="", note=""):
+    """手動で提出済み扱いにする（催促対象から除外）。監査情報つき。"""
+    k = "%s#%s" % (period, type_)
+    db.roster().update_item(
+        Key={"empId": emp_id},
+        UpdateExpression="SET manualOk = if_not_exists(manualOk, :empty)",
+        ExpressionAttributeValues={":empty": {}})
+    db.roster().update_item(
+        Key={"empId": emp_id},
+        UpdateExpression="SET manualOk.#k = :v",
+        ExpressionAttributeNames={"#k": k},
+        ExpressionAttributeValues={":v": {"by": by_name or "", "at": _now_iso(),
+                                          "note": note or "メール等で受領"}})
+
+
+def manual_ok_clear(emp_id, period, type_):
+    k = "%s#%s" % (period, type_)
+    try:
+        db.roster().update_item(
+            Key={"empId": emp_id},
+            UpdateExpression="REMOVE manualOk.#k",
+            ExpressionAttributeNames={"#k": k})
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _submitted(person, done_ids, period=None, type_=None):
+    if period and type_ and manual_ok(person, period, type_):
+        return True                                  # 手動「済」＝提出扱い
     luid = person.get("lineUserId")
     return bool(luid and luid in done_ids)
 
@@ -643,7 +578,7 @@ def _submitted(person, done_ids):
 def missing(period, type_):
     """未提交该类型的花名册成员列表。"""
     done = submitters(period, type_)
-    return [p for p in roster_people() if not _submitted(p, done)]
+    return [p for p in roster_people() if not _submitted(p, done, period, type_)]
 
 
 def missing_all_types(period):
@@ -651,7 +586,8 @@ def missing_all_types(period):
     done = {t: submitters(period, t) for t in config.SUBMISSION_TYPES}
     out = {}
     for p in roster_people():
-        miss = [t for t in config.SUBMISSION_TYPES if not _submitted(p, done[t])]
+        miss = [t for t in config.SUBMISSION_TYPES
+                if not _submitted(p, done[t], period, t)]
         if miss:
             out[p["empId"]] = {"emp": p, "missing_types": miss,
                                "lineUserId": p.get("lineUserId"),
@@ -660,7 +596,8 @@ def missing_all_types(period):
 
 
 def roster_status(period):
-    """花名册 × 类型 提交矩阵：[{emp, types:{type:item|None}, linked}]"""
+    """花名册 × 类型 提交矩阵：[{emp, types:{type:item|None}, linked}]
+    手動「済」は {"manual": True, ...監査} を入れる（表示側で ✓(手) にできる）。"""
     rows = []
     for p in roster_people():
         luid = p.get("lineUserId")
@@ -668,9 +605,17 @@ def roster_status(period):
         if luid:
             items = {it["type"]: it for it in my_submissions(luid)
                      if it.get("period") == period}
+        types = {}
+        for t in config.SUBMISSION_TYPES:
+            it = items.get(t)
+            if not it:
+                mk = manual_ok(p, period, t)
+                if mk:
+                    it = {"manual": True, **mk}
+            types[t] = it
         rows.append({
             "emp": p,
-            "types": {t: items.get(t) for t in config.SUBMISSION_TYPES},
+            "types": types,
             "linked": bool(luid),
         })
     return rows

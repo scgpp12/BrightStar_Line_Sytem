@@ -19,36 +19,47 @@ from PIL import Image, ImageDraw, ImageFont
 ssm = boto3.client("ssm", region_name="ap-northeast-1")
 
 FONT = r"C:\Windows\Fonts\meiryo.ttc"
-NAVY = (26, 41, 66)
-TEAL = (15, 118, 110)
-GOLD = (202, 138, 4)
+NAVY = (14, 34, 56)        # 背景（濃紺）
+TEAL = (22, 150, 180)      # 主要アクション（提出/認証）
+GOLD = (202, 138, 4)       # 強調（その他経費/催促）
+SLATE = (43, 74, 110)      # 通常ボタン（背景より明るい紺で視認可）
 WHITE = (245, 245, 245)
 
 # channel ごと：token パラメータ / グリッド(行,列) / ボタン[(表示, 送信テキスト, 色)]
 CH = {
     "shain": {
         "token": "/brightstar-shain/dev/line/token",
-        "rows": 1, "cols": 2, "h": 843, "bar": "メニュー",
-        "btns": [("📚 研修\n受講・申込", "研修", TEAL), ("🗂️ 人事\n勤怠・通勤費", "人事", GOLD)],
+        "rows": 2, "cols": 3, "h": 1000, "bar": "メニュー",
+        "btns": [("勤怠提出", "勤怠提出", TEAL), ("経費提出", "経費提出", TEAL),
+                 ("その他経費", "その他経費", GOLD),
+                 ("履歴", "履歴", SLATE), ("研修", "研修", SLATE),
+                 ("人事", "人事", SLATE)],
+    },
+    "soumu": {
+        "token": "/brightstar-soumu/dev/line/token",
+        "rows": 2, "cols": 3, "h": 1000, "bar": "総務メニュー",
+        "btns": [("本日認証", "認証", TEAL), ("未提出確認", "未提出確認", SLATE),
+                 ("催促", "催促", GOLD), ("催促予約", "催促予約", GOLD),
+                 ("一覧", "一覧", SLATE), ("一括DL", "一括DL", SLATE)],
     },
     "jinji": {
         "token": "/brightstar-hr/dev/line/token",
-        "rows": 2, "cols": 3, "h": 1686, "bar": "人事メニュー",
-        "btns": [("✅ 本日認証", "認証", TEAL), ("未提出確認", "未提出確認", NAVY),
-                 ("一覧", "一覧", NAVY), ("一括DL", "一括DL", NAVY),
-                 ("メール校正", "メール校正", GOLD), ("名簿", "名簿", NAVY)],
+        "rows": 2, "cols": 3, "h": 1000, "bar": "人事メニュー",
+        "btns": [("本日認証", "認証", TEAL), ("未提出確認", "未提出確認", SLATE),
+                 ("一覧", "一覧", SLATE), ("一括DL", "一括DL", SLATE),
+                 ("メール校正", "メール校正", GOLD), ("名簿", "名簿", SLATE)],
     },
     "kenshu": {
         "token": "/brightstar-kenshu/dev/line/token",
-        "rows": 1, "cols": 3, "h": 843, "bar": "講師メニュー",
-        "btns": [("✅ 本日認証", "認証", TEAL), ("講師ヘルプ", "老师帮助", NAVY),
-                 ("学員一覧", "学员列表", NAVY)],
+        "rows": 1, "cols": 3, "h": 520, "bar": "講師メニュー",
+        "btns": [("本日認証", "認証", TEAL), ("講師ヘルプ", "老师帮助", SLATE),
+                 ("学員一覧", "学员列表", SLATE)],
     },
     "eigyo": {
         "token": "/eki-commute/dev/line/channel-access-token",
-        "rows": 1, "cols": 2, "h": 843, "bar": "営業メニュー",
-        "btns": [("✅ 本日認証\n(後で現場駅名)", "認証", TEAL),
-                 ("📋 要員リストDL\n(編集→送り返す)", "要員一覧DL", GOLD)],
+        "rows": 1, "cols": 2, "h": 520, "bar": "営業メニュー",
+        "btns": [("本日認証", "認証", TEAL),
+                 ("要員リストDL", "要員一覧DL", GOLD)],
     },
 }
 
@@ -85,25 +96,38 @@ def _measure(d, text, f):
     return w, h
 
 
+def _fit_font(d, text, maxw, maxh, start=130):
+    """カード幅に収まる最大フォントを選ぶ（大きめ）。"""
+    sz = start
+    while sz >= 44:
+        f = _font(sz)
+        bb = d.textbbox((0, 0), text, font=f)
+        if (bb[2] - bb[0]) <= maxw and (bb[3] - bb[1]) <= maxh:
+            return f
+        sz -= 6
+    return _font(44)
+
+
 def build(cfg):
-    """ボタンは文字サイズ＋余白の「ピル」だけ塗る（タップ領域はセル全体）。全体も低め。"""
+    """セル全体を大きな角丸カードで塗り、中央に大きな文字（タップ領域＝セル全体）。"""
     rows, cols = cfg["rows"], cfg["cols"]
-    H = max(260, rows * ROWH)
+    H = cfg.get("h") or max(500, rows * 460)
     img = Image.new("RGB", (W, H), NAVY)
     d = ImageDraw.Draw(img)
     cw, ch = W // cols, H // rows
-    f = _font(BTN_FONT)
+    gap = 22
     areas = []
     for i, (label, text, color) in enumerate(cfg["btns"]):
         r, c = divmod(i, cols)
         x, y = c * cw, r * ch
-        cx, cy = x + cw / 2, y + ch / 2
-        tw, th = _measure(d, label, f)
-        pw = min(cw - 36, tw + 2 * PAD_X)          # 文字幅＋余白（セル幅で頭打ち）
-        ph = min(ch - 30, th + 2 * PAD_Y)
-        box = (cx - pw / 2, cy - ph / 2, cx + pw / 2, cy + ph / 2)
-        d.rounded_rectangle(box, radius=ph / 2, fill=color)   # ピル（両端まる）
-        _draw_center(d, box, label, WHITE, BTN_FONT)
+        box = (x + gap, y + gap, x + cw - gap, y + ch - gap)   # セルいっぱいのカード
+        d.rounded_rectangle(box, radius=44, fill=color)
+        bw, bh = box[2] - box[0], box[3] - box[1]
+        f = _fit_font(d, label, bw - 64, bh - 64)
+        bb = d.textbbox((0, 0), label, font=f)
+        tx = box[0] + (bw - (bb[2] - bb[0])) / 2 - bb[0]
+        ty = box[1] + (bh - (bb[3] - bb[1])) / 2 - bb[1]
+        d.text((tx, ty), label, font=f, fill=WHITE)
         areas.append({
             "bounds": {"x": x, "y": y, "width": cw, "height": ch},
             "action": {"type": "message", "text": text},

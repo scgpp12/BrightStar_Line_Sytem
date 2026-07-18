@@ -30,7 +30,10 @@ from kenshu.handlers import webhook as kenshu_web
 KENSHU, JINJI = "kenshu", "jinji"
 
 KENSHU_WORDS = {"研修", "研修メニュー", "研修モード", "研修アシスタント", "けんしゅう", "📚研修"}
-JINJI_WORDS = {"人事", "人事メニュー", "人事モード", "勤怠", "通勤費", "通勤费", "経費", "提出", "🗂️人事"}
+JINJI_WORDS = {"人事", "人事メニュー", "人事モード", "勤怠", "通勤費", "通勤费", "経費", "交通費", "交通费", "提出", "🗂️人事"}
+# 人事(提出)系ボタン：人事モードへ固定しつつ原文を jinji に委譲（メニュー表示ではなく実処理）
+SHAIN_SUBMIT_WORDS = {"勤怠提出", "経費提出", "交通費提出", "作業時間記録簿提出",
+                      "その他経費", "履歴", "テンプレ"}
 
 CHOOSER = (
     "本日のご利用メニューを選んでください👇\n"
@@ -229,6 +232,12 @@ def _dispatch(ev, base):
     # ---- ④ ヘルプ ----
     if canon == "help":
         jline.reply_messages(rt, [_shain_help(lang)])
+        return
+
+    # ---- ④.5 人事(提出)系ボタン → 人事モードに固定して原文を委譲 ----
+    if mtype == "text" and text in SHAIN_SUBMIT_WORDS:
+        _set_session(uid, JINJI, today)
+        jinji_web._route(ev, base)
         return
 
     # ---- ⑤ 明示モード切替（多言語）----

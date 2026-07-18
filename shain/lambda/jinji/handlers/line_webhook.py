@@ -100,7 +100,8 @@ def _handle_download(event):
             return _redirect(s3util.presign_get(
                 key, download_name=name, ascii_name="export.zip",
                 content_type="application/zip"))
-        return _redirect(s3util.presign_get(key, download_name=name))
+        return _redirect(s3util.presign_get(
+            key, download_name=name, content_type=s3util.content_type_for(key)))
     return {"statusCode": 404, "body": "not found"}
 
 
@@ -129,6 +130,28 @@ def _route(ev, base=""):
             line.reply(rt, reply_text)
             return
         t = (ev.get("content", "") or "").strip()
+        # --- その他経費 状態機（infer_type より前＝「経費」語の衝突回避）---
+        om = business.get_other_mode(uid)
+        if om and t in OTHER_CANCEL_CMDS:
+            business.clear_other_mode(uid)
+            line.reply(rt, T("other_cancel"))
+            return
+        if t in OTHER_CMDS:
+            business.set_other_mode(uid, "purpose")
+            line.reply(rt, T("other_ask_purpose"))
+            return
+        if om and om.get("step") == "purpose":       # このテキスト＝用途
+            business.set_other_mode(uid, "file", t)
+            line.reply(rt, T("other_ask_file", purpose=t))
+            return
+        if t in KINTAI_SUBMIT_CMDS:                   # 勤怠提出ボタン → 次のファイルを勤怠扱い
+            business.set_expect_type(uid, "kintai")
+            line.reply(rt, T("expect_file", label=type_label("kintai")))
+            return
+        if t in COMMUTE_SUBMIT_CMDS:                  # 経費提出ボタン → 次のファイルを経費扱い
+            business.set_expect_type(uid, "commute")
+            line.reply(rt, T("expect_file", label=type_label("commute")))
+            return
         tword = business.infer_type(t, t)            # 待分类文件 + 类型词 → 校验并转正
         if tword and business.has_pending(uid):
             data = business.pending_bytes(uid)
@@ -136,7 +159,11 @@ def _route(ev, base=""):
             if data is None:
                 line.reply(rt, T("submit_fail"))
             else:
-                _do_submit(uid, tword, data, rt)
+                ext, mime = s3util.detect_format(data)
+                if ext == "xlsx":
+                    _do_submit(uid, tword, data, rt)
+                else:
+                    _do_submit_raw(uid, tword, data, rt, ext, mime)
             return
         if t in TEMPLATE_CMDS:                       # 模板用按钮回复（短链，隐藏长 URL）
             line.reply_messages(rt, [_template_buttons(base)])
@@ -193,18 +220,51 @@ def _route_text(uid, text):
 
 # ---------------- 文件提交 ----------------
 
+OTHER_CMDS = ("その他経費", "その他の経費", "その他経費提出", "その他", "経費以外",
+              "other", "その他経費申請", "其他经费", "其它经费")
+OTHER_CANCEL_CMDS = ("キャンセル", "取消", "cancel", "やめる", "中止")
+KINTAI_SUBMIT_CMDS = ("勤怠提出", "作業時間記録簿提出", "勤怠", "考勤提交")
+COMMUTE_SUBMIT_CMDS = ("経費提出", "交通費提出", "通勤費提出", "交通費経費提出", "经费提交")
+
+
+def _do_submit_other(uid, data, rt, ext, mime, purpose):
+    """その他経費：用途つき保存のみ（内容チェックなし・月内複数可）。"""
+    period, _ = business.save_other_submission(uid, data, ext, mime, purpose)
+    business.clear_other_mode(uid)
+    line.reply(rt, T("other_ok", period=_fmt_period(period), purpose=purpose or "—"))
+
+
 def _handle_file(uid, ev, rt):
     data = line.download_content(ev.get("messageId"))
     if not data:
         line.reply(rt, T("submit_fail"))
         return
-    fname = ev.get("fileName") or "file.xlsx"
-    type_ = business.infer_type(fname, "")
-    if type_:
-        _do_submit(uid, type_, data, rt)
-    else:
-        business.stash_pending(uid, fname, data)
+    ext, mime = s3util.detect_format(data)
+    om = business.get_other_mode(uid)                # その他経費モードのファイル
+    if om and om.get("step") == "file":
+        _do_submit_other(uid, data, rt, ext, mime, om.get("purpose", ""))
+        return
+    et = business.get_expect_type(uid)               # 「勤怠提出／経費提出」ボタンで種別確定済み
+    fname = ev.get("fileName") or ""
+    type_ = et or business.infer_type(fname, "")
+    if et:
+        business.clear_expect_type(uid)
+    if not type_:                                    # 类型判不出 → 暂存待用户说明
+        business.stash_pending(uid, fname or ("file." + ext), data)
         line.reply(rt, T("ask_type"))
+        return
+    if ext == "xlsx":
+        _do_submit(uid, type_, data, rt)             # xlsx → 完整内容校验
+    else:
+        _do_submit_raw(uid, type_, data, rt, ext, mime)  # PDF/画像 → 存档、跳过校验
+
+
+def _do_submit_raw(uid, type_, data, rt, ext, mime):
+    """PDF/画像など xlsx 以外：内容の自動チェックはスキップして保存のみ。"""
+    period = business.current_period()
+    period, _, resubmit = business.save_submission(uid, type_, data, period, ext=ext, mime=mime)
+    line.reply(rt, T("submit_ok_raw", period=_fmt_period(period), label=type_label(type_)))
+    _maybe_notify_resubmit(uid, period, type_, resubmit)
 
 
 def _do_submit(uid, type_, data, rt):
@@ -224,6 +284,13 @@ def _do_submit(uid, type_, data, rt):
         line.reply(rt, T("name_mismatch", found=fname_in or "—",
                          want=business.emp_name(uid) or "—"))
         return
+    # 2.5) 交通費 固有チェック（責任者氏名・出勤状態・本人確認チェック）→ いずれも不可は保存しない
+    if type_ == "commute":
+        errs = business.commute_errors(data)
+        if errs:
+            line.reply_messages(
+                rt, [{"type": "text", "text": T(k, **kw)} for k, kw in errs][:5])
+            return
     # 3) 保存
     period, _, resubmit = business.save_submission(uid, type_, data, period)
     msgs = [{"type": "text",
@@ -237,6 +304,11 @@ def _do_submit(uid, type_, data, rt):
     if miss:
         days = "、".join("%d日" % d for d in miss)
         msgs.append({"type": "text", "text": T("date_incomplete_warn", days=days)})
+    # 交通費: 提出成功後のリマインド（定期券写真 + 責任者氏名 未記入時の注意）
+    if type_ == "commute":
+        if business.commute_supervisor_missing(data):
+            msgs.append({"type": "text", "text": T("commute_supervisor_reminder")})
+        msgs.append({"type": "text", "text": T("commute_teiki_reminder")})
     line.reply_messages(rt, msgs[:5])
     _maybe_notify_resubmit(uid, period, type_, resubmit)
 
@@ -351,7 +423,7 @@ def _template_buttons(base=""):
         text="空白様式をタップでダウンロード",
         actions=[
             {"label": "作業時間記録簿", "uri": base + "/dl?type=kintai"},
-            {"label": "経費", "uri": base + "/dl?type=commute"},
+            {"label": "交通費経費申請表", "uri": base + "/dl?type=commute"},
         ],
     )
 
@@ -368,8 +440,9 @@ def _history_messages(uid, base):
     lines = ["■ 提出履歴"]
     cols = []
     for it in items[:30]:
-        lines.append("・%s %s ✓" % (_fmt_period(it.get("period", "")),
-                                    type_label(it.get("type", ""))))
+        extra = ("（%s）" % it.get("purpose")) if it.get("type") == "other" and it.get("purpose") else ""
+        lines.append("・%s %s%s ✓" % (_fmt_period(it.get("period", "")),
+                                     type_label(it.get("type", "")), extra))
     for it in items[:10]:                                # 最新 10 条带下载按钮
         cols.append({
             "title": "%s %s" % (_fmt_period(it.get("period", "")),

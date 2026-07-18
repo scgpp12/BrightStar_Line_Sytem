@@ -6,14 +6,32 @@
 
 仅向未提交者 push；已提交者自动排除（靠 submissions 差集）。
 """
-from common import business, messaging
+from common import business, config, line
 from common.i18n import T, type_label
 
 
 def handler(event, context):
     event = event or {}
+
+    # ポーラー：期限到来の「催促予約」を実行（10分間隔）
+    if event.get("trigger") == "poll":
+        import time
+        due = business.bookings_due(int(time.time()))
+        for b in due:
+            try:
+                res = _send_reminders(b.get("period") or business.current_period(), None)
+                business.booking_mark(b["bookingId"], "sent")
+                print("booking %s executed: %s" % (b["bookingId"], res))
+            except Exception as e:  # noqa: BLE001
+                print("booking %s failed: %r" % (b.get("bookingId"), e))
+        return {"polled": len(due)}
+
     period = event.get("period") or business.current_period()
     only = event.get("type")
+    return _send_reminders(period, only)
+
+
+def _send_reminders(period, only):
 
     if only:
         targets = {e["empId"]: {"emp": e, "missing_types": [only],
@@ -22,17 +40,21 @@ def handler(event, context):
     else:
         targets = business.missing_all_types(period)
 
+    # リマインドは「社員アシスタント」のbotから届ける（PUSH_TOKEN_PARAM=社員token）。
+    # 未設定なら従来どおり自channelのtoken。
+    push_tok = config.push_token()
+
     sent = 0
     skipped = 0
     pj = "%s-%s" % (period[:4], period[4:])
     for v in targets.values():
         luid = v.get("lineUserId")
-        if not luid:                                     # 未绑定 LINE → 无法推送（人事手动联系）
+        if not luid:                                     # 未绑定 LINE → 无法推送（総務手动联系）
             skipped += 1
             continue
         labels = "、".join(type_label(t) for t in v["missing_types"])
         msg = T("remind_text", period=pj, labels=labels)
-        r = messaging.send(luid, msg)
+        r = line.push(luid, msg, token=push_tok)
         if r.get("errcode") == 0:
             sent += 1
         else:
