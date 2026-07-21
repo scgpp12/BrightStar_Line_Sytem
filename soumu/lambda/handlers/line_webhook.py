@@ -120,7 +120,16 @@ def _base_url(event):
     return "https://" + host
 
 
+def _path(event):
+    return ((event.get("requestContext", {}) or {}).get("http", {}) or {}).get("path", "")
+
+
 def handler(event, context):
+    # /bcast → 一斉送信フォーム（HMAC署名つきURL。LINE署名は不要）
+    if _path(event).endswith("/bcast"):
+        if _method(event) == "GET":
+            return _bcast_form(event)
+        return _bcast_submit(event)
     # GET /dl?key=... → 一括DL短縮リンク（検証不要、HMACで保護）
     if _method(event) == "GET":
         return _handle_download(event)
@@ -164,6 +173,101 @@ def _handle_download(event):
                 content_type="application/zip"))
         return _redirect(s3util.presign_get(key, download_name=name))
     return {"statusCode": 404, "body": "not found"}
+
+
+# ---------------- 一斉送信フォーム（/bcast：textarea で書いて送信） ----------------
+
+def _bcast_sign(uid, exp):
+    return hmac.new(config.line_secret().encode("utf-8"),
+                    ("bcast:%s:%s" % (uid, exp)).encode("utf-8"),
+                    hashlib.sha256).hexdigest()[:16]
+
+
+def _bcast_url(base, uid):
+    import time
+    exp = str(int(time.time()) + 1800)                 # 30分有効
+    return "%s/bcast?uid=%s&exp=%s&sig=%s" % (
+        base, urllib.parse.quote(uid, safe=""), exp, _bcast_sign(uid, exp))
+
+
+def _bcast_verify(uid, exp, sig):
+    import time
+    if not (uid and exp and sig):
+        return False
+    try:
+        if int(exp) < int(time.time()):
+            return False
+    except ValueError:
+        return False
+    return hmac.compare_digest(_bcast_sign(uid, exp), sig)
+
+
+def _html(status, body_html, title="一斉送信"):
+    page = ("<!doctype html><html lang='ja'><head><meta charset='utf-8'>"
+            "<meta name='viewport' content='width=device-width,initial-scale=1'>"
+            "<title>%s</title><style>"
+            "body{font-family:sans-serif;margin:0;background:#f4f7fb;color:#1b2733}"
+            ".wrap{max-width:560px;margin:0 auto;padding:20px 16px}"
+            ".card{background:#fff;border-radius:14px;padding:20px;box-shadow:0 2px 10px rgba(14,34,56,.08)}"
+            "h1{font-size:19px;margin:0 0 6px;color:#0e2238}"
+            ".sub{color:#5e6b7a;font-size:13px;margin:0 0 14px}"
+            "textarea{width:100%%;box-sizing:border-box;min-height:180px;font-size:16px;"
+            "padding:12px;border:1.5px solid #cbd5e1;border-radius:10px;resize:vertical}"
+            "button{width:100%%;margin-top:14px;padding:14px;font-size:16px;font-weight:700;"
+            "color:#fff;background:#1390a6;border:none;border-radius:10px}"
+            ".ok{font-size:17px;color:#0f6e56;font-weight:700}"
+            ".err{color:#a32d2d}"
+            "</style></head><body><div class='wrap'><div class='card'>%s</div></div></body></html>"
+            ) % (title, body_html)
+    return {"statusCode": status,
+            "headers": {"Content-Type": "text/html; charset=utf-8"},
+            "body": page}
+
+
+def _bcast_form(event):
+    params = urllib.parse.parse_qs(event.get("rawQueryString", "") or "")
+    uid = params.get("uid", [None])[0]
+    exp = params.get("exp", [None])[0]
+    sig = params.get("sig", [None])[0]
+    if not _bcast_verify(uid, exp, sig):
+        return _html(403, "<h1>リンクが無効です</h1><p class='sub err'>有効期限切れの可能性があります。LINE で「一斉送信」をもう一度実行し、新しいリンクを開いてください。</p>")
+    if not business.is_admin(uid):
+        return _html(403, "<h1>権限がありません</h1><p class='sub err'>一斉送信は管理者のみ利用できます。</p>")
+    n = len(business.broadcast_targets())
+    import html as _h
+    body = ("<h1>📣 一斉送信</h1>"
+            "<p class='sub'>入力した内容がそのまま全社員（社員アシスタント %d 名）に届きます。</p>"
+            "<form method='post'>"
+            "<input type='hidden' name='uid' value='%s'>"
+            "<input type='hidden' name='exp' value='%s'>"
+            "<input type='hidden' name='sig' value='%s'>"
+            "<textarea name='text' placeholder='ここにお知らせ内容を入力してください' required></textarea>"
+            "<button type='submit' onclick=\"return confirm('全社員 %d 名に送信します。よろしいですか？')\">📨 全社員に送信する</button>"
+            "</form>") % (n, _h.escape(uid), _h.escape(exp), _h.escape(sig), n)
+    return _html(200, body)
+
+
+def _bcast_submit(event):
+    raw = _raw_body(event).decode("utf-8", "ignore")
+    form = urllib.parse.parse_qs(raw)
+    uid = form.get("uid", [None])[0]
+    exp = form.get("exp", [None])[0]
+    sig = form.get("sig", [None])[0]
+    text = (form.get("text", [""])[0] or "").strip()
+    if not _bcast_verify(uid, exp, sig) or not business.is_admin(uid):
+        return _html(403, "<h1>送信できません</h1><p class='sub err'>リンクが無効か、権限がありません。LINE からやり直してください。</p>")
+    if not text:
+        return _html(400, "<h1>内容が空です</h1><p class='sub err'>戻って内容を入力してください。</p>")
+    n = len(business.broadcast_targets())
+    if n == 0:
+        return _html(400, "<h1>送信対象がいません</h1><p class='sub err'>LINE連携済みの社員がいません。</p>")
+    business.bcast_clear(uid)                          # トーク側の編集状態も掃除
+    fn = config.REMINDER_FUNCTION_NAME or os.environ.get("REMINDER_FUNCTION_NAME")
+    _lambda_client().invoke(
+        FunctionName=fn, InvocationType="Event",
+        Payload=json.dumps({"trigger": "broadcast", "text": text, "by": uid}).encode("utf-8"))
+    return _html(200, "<p class='ok'>✅ 送信を開始しました（対象 %d 名）</p>"
+                      "<p class='sub'>完了すると LINE に結果（成功/失敗の人数）が届きます。このページは閉じて構いません。</p>" % n)
 
 
 # ---------------- 路由 ----------------
@@ -262,8 +366,11 @@ def _route(ev, base=""):
             if not business.is_admin(uid):
                 line.reply(rt, T("bcast_no_perm"))
                 return
-            business.bcast_set(uid, "text")
-            line.reply(rt, T("bcast_ask"))
+            business.bcast_set(uid, "text")            # トーク直接入力も引き続き可
+            line.reply_messages(rt, [line.buttons_message(
+                alt_text="一斉送信",
+                text=T("bcast_ask"),
+                actions=[{"label": "✏️ 入力フォームを開く", "uri": _bcast_url(base, uid)}])])
             return
 
         canon = assist.resolve(t, INTENTS)
