@@ -267,6 +267,9 @@ def _route(ev, base=""):
         if t.startswith(("済", "済解除")):            # 手動「済」＝催促除外（メール等で受領）
             line.reply(rt, _handle_manual_ok(uid, t))
             return
+        if canon == "missing" or any(k in t for k in ("未提出", "未提交", "谁没交", "誰が出して", "未提出者")):
+            line.reply_messages(rt, _hr_missing_messages(t))   # 済ボタン付き
+            return
         if canon == "roster_status" or _is_roster_cmd(t):
             line.reply_messages(rt, _hr_roster_messages(business.normalize_period(t)))
             return
@@ -286,8 +289,6 @@ def _route_text(uid, text, lang="ja", canon=None):
     t = (text or "").strip()
     if canon == "help" or t in ("メニュー", "菜单", "menu", "help", "?", "？"):
         return T("menu_hr", lang=lang)
-    if canon == "missing" or any(k in t for k in ("未提出", "未提交", "谁没交", "誰が出して", "未提出者")):
-        return _hr_missing(t)
     if canon == "remind" or any(k in t for k in ("催促", "催办", "リマインド", "提醒", "督促")):
         return _hr_remind(uid, t)
     return T("fallback", lang=lang)
@@ -369,6 +370,7 @@ def _mark_unreg(has_line):
 
 
 def _hr_missing(text):
+    """未提出一覧のテキスト。行頭に社員番号（済 コマンド／ボタンで使う）。"""
     period = business.normalize_period(text)
     only = business.infer_type(text, text)
     lines = ["■ 未提出（%s）" % _fmt_period(period)]
@@ -378,22 +380,44 @@ def _hr_missing(text):
             return T("all_submitted")
         lines.append("【%s】" % type_label(only))
         for e in miss:
-            lines.append("・%s（%s）%s" % (e.get("name", e.get("empId", "")),
-                                         e.get("department", ""),
-                                         _mark_unreg(e.get("lineUserId"))))
+            lines.append("・%s %s（%s）%s" % (e.get("empId", ""),
+                                            e.get("name", ""),
+                                            e.get("department", ""),
+                                            _mark_unreg(e.get("lineUserId"))))
+        lines.append("")
+        lines.append(T("manual_hint"))
         return "\n".join(lines)
     mm = business.missing_all_types(period)
     if not mm:
         return T("all_submitted")
-    for v in mm.values():
+    for eid in sorted(mm):
+        v = mm[eid]
         e = v["emp"]
         labels = "、".join(type_label(t) for t in v["missing_types"])
-        lines.append("・%s（%s）— 未: %s%s" % (e.get("name", e.get("empId", "")),
-                                             e.get("department", ""), labels,
-                                             _mark_unreg(v.get("linked"))))
+        lines.append("・%s %s（%s）— 未: %s%s" % (eid, e.get("name", ""),
+                                                e.get("department", ""), labels,
+                                                _mark_unreg(v.get("linked"))))
     lines.append("")
     lines.append(T("manual_hint"))
     return "\n".join(lines)
+
+
+def _hr_missing_messages(text):
+    """未提出一覧＋「済」ワンタップボタン（最大13名分）。押すと「済 E00X」を送信。"""
+    body = _hr_missing(text)
+    period = business.normalize_period(text)
+    mm = business.missing_all_types(period)
+    items = []
+    for eid in sorted(mm):
+        if len(items) >= 13:
+            break
+        nm = mm[eid]["emp"].get("name", eid)
+        items.append(("済 " + nm[:17], "済 " + eid))
+    if not items:
+        return [{"type": "text", "text": body}]
+    if len(mm) > 13:
+        body += "\n" + T("manual_more")
+    return [assist.quick_reply(body, items)]
 
 
 ROSTER_CMDS_KW = ("一覧", "一览", "全員", "全员", "提出状況", "提交情况")
@@ -417,8 +441,8 @@ def _emp_line(r):
         return "✓(手)" if isinstance(it, dict) and it.get("manual") else "✓"
     marks = " ".join("%s%s" % (type_label(t), _mk(it)) for t, it in r["types"].items())
     tail = "" if r.get("linked") else "  " + T("line_unregistered")
-    return "・%s（%s） %s%s" % (e.get("name", e.get("empId", "")),
-                              e.get("department", ""), marks, tail)
+    return "・%s %s（%s） %s%s" % (e.get("empId", ""), e.get("name", ""),
+                                 e.get("department", ""), marks, tail)
 
 
 def _hr_roster_messages(period):
