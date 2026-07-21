@@ -485,6 +485,55 @@ def submitters(period, type_):
     return ids
 
 
+# ---------------- 一斉送信（管理者のみ・社員botから全社員へ配信） ----------------
+
+def is_admin(user_id):
+    """roster.admin が真値の人だけ一斉送信可（HRが「社員変更 E001 管理者 true」で付与）。"""
+    r = roster_of(user_id) or {}
+    return str(r.get("admin", "")).strip().lower() in ("true", "1", "yes", "有", "○", "on")
+
+
+def broadcast_targets():
+    """配信対象＝花名册で LINE 連携済み・非ブロックの全員の lineUserId。"""
+    out = []
+    for p in roster_people():
+        luid = p.get("lineUserId")
+        if luid and not p.get("blocked"):
+            out.append(luid)
+    return out
+
+
+def _bcast_key(user_id):
+    return {"pk": "soumu#%s" % user_id}
+
+
+def bcast_set(user_id, step, text=None):
+    from . import authlib
+    expr, vals = "SET bcastStep=:s", {":s": step}
+    if text is not None:
+        expr += ", bcastText=:t"
+        vals[":t"] = text
+    authlib._auth().update_item(Key=_bcast_key(user_id),
+                                 UpdateExpression=expr, ExpressionAttributeValues=vals)
+
+
+def bcast_get(user_id):
+    from . import authlib
+    it = authlib._auth().get_item(Key=_bcast_key(user_id)).get("Item") or {}
+    if it.get("bcastStep"):
+        return {"step": it["bcastStep"], "text": it.get("bcastText", "")}
+    return None
+
+
+def bcast_clear(user_id):
+    from . import authlib
+    try:
+        authlib._auth().update_item(Key=_bcast_key(user_id),
+                                     UpdateExpression="REMOVE bcastStep, bcastText")
+    except Exception:  # noqa: BLE001
+        pass
+
+
 # ---------------- 催促予約（日時ピッカーで登録 → 10分間隔ポーラーが実行） ----------------
 
 def booking_add(dt_str, created_by="", period=""):

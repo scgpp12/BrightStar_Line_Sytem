@@ -13,6 +13,29 @@ from common.i18n import T, type_label
 def handler(event, context):
     event = event or {}
 
+    # 一斉送信（管理者が総務webhookから起動。社員botのtokenで全社員へ）
+    if event.get("trigger") == "broadcast":
+        text = (event.get("text") or "").strip()
+        by = event.get("by") or ""
+        if not text:
+            return {"sent": 0}
+        targets = business.broadcast_targets()
+        push_tok = config.push_token()
+        sent = fail = 0
+        for luid in targets:
+            r = line.push(luid, text, token=push_tok)
+            if r.get("errcode") == 0:
+                sent += 1
+            else:
+                fail += 1
+                print("bcast push fail:", luid, r)
+        skipped = sum(1 for p in business.roster_people()
+                      if not p.get("lineUserId") or p.get("blocked"))
+        print("broadcast sent=%d fail=%d skipped=%d by=%s" % (sent, fail, skipped, by))
+        if by:                                        # 実行結果を発起人（総務チャネル）へ
+            line.push(by, T("bcast_report", sent=sent, fail=fail, skipped=skipped))
+        return {"sent": sent, "fail": fail, "skipped": skipped}
+
     # ポーラー：期限到来の「催促予約」を実行（10分間隔）
     if event.get("trigger") == "poll":
         import time

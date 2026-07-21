@@ -158,6 +158,7 @@ _FIELD_ALIAS = {
     "dept": "department", "department": "department", "部署": "department",
     "部门": "department", "所属": "department",
     "role": "role", "役割": "role", "角色": "role",
+    "admin": "admin", "管理者": "admin", "管理员": "admin", "broadcast": "admin",
     "aliases": "aliases", "alias": "aliases", "別名": "aliases", "别名": "aliases",
     "カナ": "aliases", "かな": "aliases", "フリガナ": "aliases", "ふりがな": "aliases",
     "読み": "aliases", "読み方": "aliases", "读音": "aliases", "yomi": "aliases", "別称": "aliases",

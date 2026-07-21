@@ -37,10 +37,11 @@ CH = {
     },
     "soumu": {
         "token": "/brightstar-soumu/dev/line/token",
-        "rows": 2, "cols": 3, "h": 1000, "bar": "総務メニュー",
+        "rows": 2, "cols": 4, "h": 1000, "bar": "総務メニュー",
         "btns": [("本日認証", "認証", TEAL), ("未提出確認", "未提出確認", SLATE),
                  ("催促", "催促", GOLD), ("催促予約", "催促予約", GOLD),
-                 ("一覧", "一覧", SLATE), ("一括DL", "一括DL", SLATE)],
+                 ("一覧", "一覧", SLATE), ("一括DL", "一括DL", SLATE),
+                 ("一斉送信", "一斉送信", TEAL), ("ヘルプ", "ヘルプ", SLATE)],
     },
     "jinji": {
         "token": "/brightstar-hr/dev/line/token",

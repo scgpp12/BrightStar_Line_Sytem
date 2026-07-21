@@ -38,6 +38,8 @@ _HELP_ENTRIES = [
     ("催促[202606] … 未提出者に督促", "催促[202606] … 给未提交者发提醒", "催促", "催促"),
     ("済 E003 … メール受領を手動で提出済みに", "済 E003 … 手动标为已交(邮件收到)", None, None),
     ("一括DL … 当月の提出を一括DL", "一括DL … 打包下载当月提交", "一括DL", "一括DL"),
+    ("催促予約 … 日時指定で自動催促", "催促予約 … 预约定时催促", "催促予約", "催促予約"),
+    ("一斉送信 … 全社員へお知らせ（管理者のみ）", "一斉送信 … 给全员群发（仅管理员）", "一斉送信", "一斉送信"),
     ("本日認証 … 当日の本人確認", "本日認証 … 当天本人确认", "認証", "認証"),
     ("登録解除 … 別人で登録し直す", "登録解除 … 换人重新登记", None, None),
 ]
@@ -250,6 +252,21 @@ def _route(ev, base=""):
 
     if mtype == "text":
         t = (ev.get("content", "") or "").strip()
+
+        # --- 一斉送信 状態機（編集中は他コマンドより優先） ---
+        bc = business.bcast_get(uid)
+        if bc:
+            handled = _bcast_flow(uid, t, bc, rt)
+            if handled:
+                return
+        if t.startswith(("一斉送信", "一斉配信", "全員送信", "群发")):
+            if not business.is_admin(uid):
+                line.reply(rt, T("bcast_no_perm"))
+                return
+            business.bcast_set(uid, "text")
+            line.reply(rt, T("bcast_ask"))
+            return
+
         canon = assist.resolve(t, INTENTS)
         if canon == "help":
             line.reply_messages(rt, [_help(lang)])
@@ -292,6 +309,53 @@ def _route_text(uid, text, lang="ja", canon=None):
     if canon == "remind" or any(k in t for k in ("催促", "催办", "リマインド", "提醒", "督促")):
         return _hr_remind(uid, t)
     return T("fallback", lang=lang)
+
+
+# ---------------- 一斉送信（管理者） ----------------
+
+BCAST_CANCEL = ("キャンセル", "取消", "cancel", "やめる", "中止")
+BCAST_CONFIRM = ("送信する", "送信", "はい", "发送", "确认发送")
+
+
+def _bcast_flow(uid, t, bc, rt):
+    """編集/確認中のテキストを処理。処理したら True。"""
+    if t in BCAST_CANCEL:
+        business.bcast_clear(uid)
+        line.reply(rt, T("bcast_cancel"))
+        return True
+    step = bc.get("step")
+    if step == "text":                                # このテキスト＝送信内容
+        n = len(business.broadcast_targets())
+        if n == 0:
+            business.bcast_clear(uid)
+            line.reply(rt, T("bcast_empty"))
+            return True
+        business.bcast_set(uid, "confirm", t)
+        line.reply_messages(rt, [assist.quick_reply(
+            T("bcast_preview", n=n, text=t),
+            [("📨 送信する", "送信する"), ("❌ キャンセル", "キャンセル")])])
+        return True
+    if step == "confirm":
+        if t in BCAST_CONFIRM:
+            text = bc.get("text", "")
+            business.bcast_clear(uid)
+            n = len(business.broadcast_targets())
+            fn = config.REMINDER_FUNCTION_NAME or os.environ.get("REMINDER_FUNCTION_NAME")
+            _lambda_client().invoke(
+                FunctionName=fn, InvocationType="Event",
+                Payload=json.dumps({"trigger": "broadcast", "text": text,
+                                    "by": uid}).encode("utf-8"))
+            line.reply(rt, T("bcast_started", n=n))
+            return True
+        # 確認中の他テキスト＝内容の書き直しとして扱う
+        business.bcast_set(uid, "confirm", t)
+        n = len(business.broadcast_targets())
+        line.reply_messages(rt, [assist.quick_reply(
+            T("bcast_preview", n=n, text=t),
+            [("📨 送信する", "送信する"), ("❌ キャンセル", "キャンセル")])])
+        return True
+    business.bcast_clear(uid)
+    return False
 
 
 # ---------------- 催促予約（日時ピッカー） ----------------
