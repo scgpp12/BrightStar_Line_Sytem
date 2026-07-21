@@ -18,8 +18,8 @@ from boto3.dynamodb.conditions import Key
 from . import config, db, i18n, jpholiday, s3util, xlsx, zhconv
 
 # 内容チェック対象セル
-# commute(交通費経費申請表) は第一シート＝交通費: 年月=B1(日付), 氏名=D6「氏名：◯◯」
-# kintai(作業時間記録簿): 年月=B5, 氏名=B3
+# commute(交通費経費) は第一シート＝交通費: 年月=B1(日付), 氏名=D6「氏名：◯◯」
+# kintai(勤務表): 年月=B5, 氏名=B3
 PERIOD_CELL = {"kintai": "B5", "commute": "B1"}   # 年月
 NAME_CELL = {"kintai": "B3", "commute": "D6"}      # 氏名
 _WD = "月火水木金土日"

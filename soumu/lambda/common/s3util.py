@@ -1,9 +1,9 @@
 """S3 提交物存取 + 预签名 URL。
 
 布局（用户规格）：
-  hr/{yyyy}/{mm}/worktimes/作業時間記録簿（{姓名}）_{YYYYMM}.xlsx   (kintai)
+  hr/{yyyy}/{mm}/worktimes/勤務表（{姓名}）_{YYYYMM}.xlsx   (kintai)
   hr/{yyyy}/{mm}/expenses/経費（{姓名}）_{YYYYMM}.xlsx              (commute)
-  hr/template/作業時間記録簿.xlsx / hr/template/経費.xlsx           (空白样式)
+  hr/template/勤務表.xlsx / hr/template/経費.xlsx           (空白样式)
 提交对象统一打标签 lifecycle=managed（生命周期规则按此标签归档/删除，模板不受影响）。
 桶开版本管理 → 允许重复提交，旧版本保留。
 """
@@ -22,8 +22,8 @@ SUBMISSION_TAG = "lifecycle=managed"
 
 # 类型 → 目录 / 显示名 / 模板 key
 TYPE_META = {
-    "kintai":  {"folder": "worktimes", "label": "作業時間記録簿",
-                "template": "hr/template/作業時間記録簿.xlsx", "ascii": "kintai.xlsx"},
+    "kintai":  {"folder": "worktimes", "label": "勤務表",
+                "template": "hr/template/勤務表.xlsx", "ascii": "kintai.xlsx"},
     "commute": {"folder": "expenses",  "label": "経費",
                 "template": "hr/template/経費.xlsx", "ascii": "keihi.xlsx"},
 }

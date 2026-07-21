@@ -223,7 +223,7 @@ def _route_text(uid, text):
 OTHER_CMDS = ("その他経費", "その他の経費", "その他経費提出", "その他", "経費以外",
               "other", "その他経費申請", "其他经费", "其它经费")
 OTHER_CANCEL_CMDS = ("キャンセル", "取消", "cancel", "やめる", "中止")
-KINTAI_SUBMIT_CMDS = ("勤怠提出", "作業時間記録簿提出", "勤怠", "考勤提交")
+KINTAI_SUBMIT_CMDS = ("勤怠提出", "勤務表提出", "勤怠", "考勤提交")
 COMMUTE_SUBMIT_CMDS = ("経費提出", "交通費提出", "通勤費提出", "交通費経費提出", "经费提交")
 
 
@@ -422,8 +422,8 @@ def _template_buttons(base=""):
         alt_text="空白様式のダウンロード",
         text="空白様式をタップでダウンロード",
         actions=[
-            {"label": "作業時間記録簿", "uri": base + "/dl?type=kintai"},
-            {"label": "交通費経費申請表", "uri": base + "/dl?type=commute"},
+            {"label": "勤務表", "uri": base + "/dl?type=kintai"},
+            {"label": "交通費経費", "uri": base + "/dl?type=commute"},
         ],
     )
 
