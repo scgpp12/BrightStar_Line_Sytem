@@ -33,6 +33,21 @@ def _auth():
     return _res().Table(os.environ["AUTH_TABLE"])
 
 
+def has_role(item, role):
+    """役割判定：role(主) と roles(複数・CSV/リスト) のどちらかに含まれれば True。
+    一人が hr,teacher など複数役割を持てる（社員変更 E001 役割 hr,講師）。"""
+    if not item:
+        return False
+    role = (role or "").strip().lower()
+    if (str(item.get("role") or "")).strip().lower() == role:
+        return True
+    rs = item.get("roles")
+    if isinstance(rs, str):
+        import re as _re
+        rs = _re.split(r"[,，、/\s　]+", rs)
+    return role in [str(x).strip().lower() for x in (rs or []) if str(x).strip()]
+
+
 def today_jst():
     return datetime.now(JST).strftime("%Y-%m-%d")
 

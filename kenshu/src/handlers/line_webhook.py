@@ -63,7 +63,7 @@ MSG_TAKEN = ("この社員番号は別の LINE アカウントで登録済みで
 
 
 def _teacher_pred(item):
-    return item.get("role") == "teacher"
+    return authlib.has_role(item, "teacher")
 
 
 def _raw_body(event) -> bytes:

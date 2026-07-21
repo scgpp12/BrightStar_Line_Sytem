@@ -49,16 +49,15 @@ def _relevant_channels(item):
     総務(soumu or 総務部)を追加。
     ※「使えない channel に届くか」は判定対象にしない（例：営業の人が研修 bot を
       友だち追加していても研修は役割ゲートで使えないので、活きている証拠にしない）。"""
-    role = (item.get("role") or "").lower()
     dept = item.get("department") or ""
     chans = ["shain"]                       # 社員アシスタントは全員可
-    if role == "teacher":
+    if authlib.has_role(item, "teacher"):
         chans.append("kenshu")
-    if role == "hr":
+    if authlib.has_role(item, "hr"):
         chans.append("jinji")
-    if role == "sales" or "営業" in dept:
+    if authlib.has_role(item, "sales") or "営業" in dept:
         chans.append("eigyo")
-    if role in ("hr", "soumu") or "総務" in dept:
+    if authlib.has_role(item, "hr") or authlib.has_role(item, "soumu") or "総務" in dept:
         chans.append("soumu")
     return chans
 

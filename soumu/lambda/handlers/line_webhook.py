@@ -60,9 +60,8 @@ def _auth_ok_with_help(uid, name, dept):
 
 
 def _soumu_pred(item):
-    """総務チャネルの権限：花名册 role=hr または role=soumu。
-    既存の人事(hr)はそのまま使え、将来 role=soumu を付与すれば総務専任も可。"""
-    return item.get("role") in ("hr", "soumu")
+    """総務チャネルの権限：役割に hr または soumu を含む（複数役割対応）。"""
+    return authlib.has_role(item, "hr") or authlib.has_role(item, "soumu")
 
 
 def _auth_reply(rt, action, item):

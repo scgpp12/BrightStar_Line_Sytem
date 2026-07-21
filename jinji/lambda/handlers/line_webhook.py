@@ -44,8 +44,8 @@ def _auth_ok_with_help(uid, name, dept):
 
 
 def _hr_pred(item):
-    """认证人是否有人事权限：花名册 role=hr。"""
-    return item.get("role") == "hr"
+    """认证人是否有人事权限：役割に hr を含む（複数役割対応）。"""
+    return authlib.has_role(item, "hr")
 
 
 def _auth_reply(rt, action, item):
@@ -230,9 +230,12 @@ def _roster_list_msg():
         linked = "✓Line" if r.get("lineUserId") else T("line_unregistered")
         if r.get("blocked"):
             linked += " 🚫ブロック中"
+        dept = r.get("department", "")
+        if r.get("attribute"):
+            dept += "・" + r["attribute"]
         lines.append("・%s %s（%s／%s）%s" % (
-            r.get("empId", ""), r.get("name", ""), r.get("department", ""),
-            r.get("role", ""), linked))
+            r.get("empId", ""), r.get("name", ""), dept,
+            r.get("roles") or r.get("role", ""), linked))
     return "\n".join(lines)
 
 

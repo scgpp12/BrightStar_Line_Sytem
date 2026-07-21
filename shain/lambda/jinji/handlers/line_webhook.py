@@ -345,9 +345,12 @@ def _roster_list_msg():
     lines = ["■ 社員名簿（%d名）" % len(rows)]
     for r in rows:
         linked = "✓Line" if r.get("lineUserId") else T("line_unregistered")
+        dept = r.get("department", "")
+        if r.get("attribute"):
+            dept += "・" + r["attribute"]
         lines.append("・%s %s（%s／%s）%s" % (
-            r.get("empId", ""), r.get("name", ""), r.get("department", ""),
-            r.get("role", ""), linked))
+            r.get("empId", ""), r.get("name", ""), dept,
+            r.get("roles") or r.get("role", ""), linked))
     return "\n".join(lines)
 
 

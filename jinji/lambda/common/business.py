@@ -51,6 +51,11 @@ def _strip_prefix(uid):
     return uid[len(USER_PREFIX):] if uid.startswith(USER_PREFIX) else uid
 
 
+def _authlib():
+    from . import authlib
+    return authlib
+
+
 # ---------------- 花名册（主数据） ----------------
 
 def roster_scan():
@@ -157,8 +162,10 @@ _FIELD_ALIAS = {
     "name": "name", "姓名": "name", "名前": "name", "名字": "name",
     "dept": "department", "department": "department", "部署": "department",
     "部门": "department", "所属": "department",
-    "role": "role", "役割": "role", "角色": "role",
+    "role": "role", "役割": "role", "角色": "role", "roles": "role",
     "admin": "admin", "管理者": "admin", "管理员": "admin", "broadcast": "admin",
+    "属性": "attribute", "国籍": "attribute", "分類": "attribute", "分类": "attribute",
+    "attribute": "attribute", "tag": "attribute", "タグ": "attribute",
     "aliases": "aliases", "alias": "aliases", "別名": "aliases", "别名": "aliases",
     "カナ": "aliases", "かな": "aliases", "フリガナ": "aliases", "ふりがな": "aliases",
     "読み": "aliases", "読み方": "aliases", "读音": "aliases", "yomi": "aliases", "別称": "aliases",
@@ -171,7 +178,18 @@ def roster_update_field(emp_id, field_key, value):
         return None, None
     value = (value or "").strip()
     if field == "role":
-        value = norm_role(value)
+        import re as _re
+        parts = [norm_role(p) for p in _re.split(r"[,，、/\s　]+", value) if p.strip()]
+        parts = list(dict.fromkeys(parts)) or ["employee"]
+        # 主役割 + roles(複数) を同時更新（has_role がどちらも見る）
+        db.roster().update_item(
+            Key={"empId": emp_id},
+            UpdateExpression="SET #f=:v, #rs=:rs, updatedAt=:u",
+            ExpressionAttributeNames={"#f": "role", "#rs": "roles"},
+            ExpressionAttributeValues={":v": parts[0], ":rs": ",".join(parts),
+                                       ":u": _now_iso()},
+        )
+        return field, ",".join(parts)
     db.roster().update_item(
         Key={"empId": emp_id},
         UpdateExpression="SET #f=:v, updatedAt=:u",
@@ -217,7 +235,8 @@ def roster_of(user_id):
 
 def is_hr(user_id):
     r = roster_of(user_id)
-    if r and r.get("role") == "hr":
+    from . import authlib
+    if r and authlib.has_role(r, "hr"):
         return True
     bare = _strip_prefix(user_id)
     return user_id in config.HR_USERIDS or bare in config.HR_USERIDS
@@ -234,7 +253,7 @@ def emp_name(user_id):
 def list_hr():
     """全部人事的 lineUserId（花名册 role=hr 且已绑定 + 白名单 HR_USERIDS）。"""
     ids = {r["lineUserId"] for r in roster_scan()
-           if r.get("role") == "hr" and r.get("lineUserId")}
+           if _authlib().has_role(r, "hr") and r.get("lineUserId")}
     for h in config.HR_USERIDS:
         ids.add(h)
     return list(ids)
@@ -286,7 +305,7 @@ def handle_registration(user_id, text):
             UpdateExpression="SET lineUserId=:u",
             ExpressionAttributeValues={":u": user_id},
         )
-        menu = i18n.T("menu_hr") if r.get("role") == "hr" else i18n.T("menu_employee")
+        menu = i18n.T("menu_hr") if _authlib().has_role(r, "hr") else i18n.T("menu_employee")
         return True, i18n.T("registered", name=r.get("name", ""),
                             dept=r.get("department", ""), menu=menu)
     return False, None
