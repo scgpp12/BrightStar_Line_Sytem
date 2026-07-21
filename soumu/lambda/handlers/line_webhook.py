@@ -33,9 +33,9 @@ INTENTS.update({
 
 # ヘルプ項目: (説明 ja, 説明 zh, ボタン名, 送信キーワード)
 _HELP_ENTRIES = [
-    ("一覧[202606] … 全員の提出状況", "一覧[202606] … 全员提交情况", "一覧", "一覧"),
-    ("未提出確認[202606] … 未提出者", "未提出確認[202606] … 未提交者", "未提出確認", "未提出確認"),
-    ("催促[202606] … 未提出者に督促", "催促[202606] … 给未提交者发提醒", "催促", "催促"),
+    ("一覧[{p}] … 全員の提出状況", "一覧[{p}] … 全员提交情况", "一覧", "一覧"),
+    ("未提出確認[{p}] … 未提出者", "未提出確認[{p}] … 未提交者", "未提出確認", "未提出確認"),
+    ("催促[{p}] … 未提出者に督促", "催促[{p}] … 给未提交者发提醒", "催促", "催促"),
     ("済 E003 … メール受領を手動で提出済みに", "済 E003 … 手动标为已交(邮件收到)", None, None),
     ("一括DL … 当月の提出を一括DL", "一括DL … 打包下载当月提交", "一括DL", "一括DL"),
     ("催促予約 … 日時指定で自動催促", "催促予約 … 预约定时催促", "催促予約", "催促予約"),
@@ -47,7 +47,9 @@ _HELP_ENTRIES = [
 
 def _help(lang):
     title = "■ 総務メニュー（ボタンをタップで実行）" if lang == "ja" else "■ 总务菜单（点按钮即执行）"
-    return assist.help_message(lang, title, _HELP_ENTRIES)
+    p = business.current_period()               # 例示の年月は当月
+    entries = [(ja.format(p=p), zh.format(p=p), b, k) for ja, zh, b, k in _HELP_ENTRIES]
+    return assist.help_message(lang, title, entries)
 
 
 def _auth_ok_with_help(uid, name, dept):

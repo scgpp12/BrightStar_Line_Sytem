@@ -34,6 +34,19 @@ def _now_iso():
     return datetime.now(timezone.utc).isoformat()
 
 
+def prev_period():
+    """前月の yyyymm。月初にずれ込んだ前月分の提出を受け付けるために使う。"""
+    y, m = int(current_period()[:4]), int(current_period()[4:])
+    return "%04d%02d" % (y - 1, 12) if m == 1 else "%04d%02d" % (y, m - 1)
+
+
+def file_period(type_, data):
+    """提出ファイル内の年月セル（勤務表B5／交通費経費B1）→ 'yyyymm'。読めなければ None。"""
+    ref = PERIOD_CELL.get(type_)
+    ym = xlsx.cell_year_month(data, ref) if ref else None
+    return None if ym is None else "%04d%02d" % ym
+
+
 def normalize_period(text):
     """从用户文本里抽月份；'6月'/'202606'/'2026-06'/'[202606]' → '202606'，否则当月。"""
     import re

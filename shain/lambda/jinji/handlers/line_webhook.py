@@ -268,16 +268,23 @@ def _do_submit_raw(uid, type_, data, rt, ext, mime):
 
 
 def _do_submit(uid, type_, data, rt):
-    """提出の検証→保存→返信（年月／氏名チェック、休日勤務の注意）。"""
-    # 1) 年月チェック（不一致は保存しない）
-    period = business.current_period()
-    ok, found = business.check_file_period(type_, data, period)
-    if not ok:
-        lbl = type_label(type_)
-        exp = _fmt_period(period)
-        line.reply(rt, T("period_unreadable", label=lbl) if found is None
-                   else T("period_mismatch", label=lbl, found=found, expected=exp))
+    """提出の検証→保存→返信（年月／氏名チェック、休日勤務の注意）。
+
+    年月＝ファイル内の年月セル。**当月または前月**を受け付け、
+    ファイルの年月どおりのフォルダ／ファイル名で保存する
+    （月末締めが翌月頭にずれ込む提出も、正しい月に格納される）。"""
+    # 1) 年月チェック（当月・前月以外は保存しない）
+    fp = business.file_period(type_, data)
+    cur, prv = business.current_period(), business.prev_period()
+    lbl = type_label(type_)
+    if fp is None:
+        line.reply(rt, T("period_unreadable", label=lbl))
         return
+    if fp not in (cur, prv):
+        line.reply(rt, T("period_mismatch", label=lbl, found=_fmt_period(fp),
+                         expected="%s／%s" % (_fmt_period(prv), _fmt_period(cur))))
+        return
+    period = fp                                   # ファイルの年月で格納
     # 2) 氏名チェック（勤務表のみ・不一致は保存しない）
     ok_name, fname_in = business.check_name(type_, data, uid)
     if not ok_name:
