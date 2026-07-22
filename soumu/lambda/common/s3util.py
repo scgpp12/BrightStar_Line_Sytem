@@ -152,3 +152,28 @@ def build_month_zip(period):
     _s3.put_object(Bucket=config.BUCKET_NAME, Key=zipkey, Body=buf.getvalue(),
                    ContentType="application/zip")
     return zipkey, len(keys)
+
+
+def build_keys_zip(keys, zipname):
+    """指定 s3 キー群を zip（exports/{zipname}.zip）。返り値 (zipkey, 件数)。"""
+    keys = [k for k in keys if k]
+    if not keys:
+        return None, 0
+    buf = io.BytesIO()
+    seen = {}
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for k in keys:
+            body = _s3.get_object(Bucket=config.BUCKET_NAME, Key=k)["Body"].read()
+            arc = k.rsplit("/", 1)[-1]
+            if arc in seen:
+                seen[arc] += 1
+                stem, _, ext = arc.rpartition(".")
+                arc = "%s_%d.%s" % (stem or arc, seen[arc], ext or "xlsx")
+            else:
+                seen[arc] = 0
+            zf.writestr(arc, body)
+    buf.seek(0)
+    zipkey = "exports/%s.zip" % _safe(zipname)
+    _s3.put_object(Bucket=config.BUCKET_NAME, Key=zipkey, Body=buf.getvalue(),
+                   ContentType="application/zip")
+    return zipkey, len(keys)

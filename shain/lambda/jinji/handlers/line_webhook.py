@@ -15,7 +15,7 @@ import urllib.parse
 
 import boto3
 
-from jinji.common import business, config, line, messaging, s3util
+from jinji.common import assist, business, config, line, messaging, s3util
 from jinji.common.i18n import T, type_label
 
 _lambda = None
@@ -144,14 +144,33 @@ def _route(ev, base=""):
             business.set_other_mode(uid, "file", t)
             line.reply(rt, T("other_ask_file", purpose=t))
             return
-        if t in KINTAI_SUBMIT_CMDS:                   # 勤怠提出ボタン → 次のファイルを勤怠扱い
-            business.set_expect_type(uid, "kintai")
-            line.reply(rt, T("expect_file", label=type_label("kintai")))
+        if t in KINTAI_SUBMIT_CMDS:                   # 勤怠提出ボタン → 様式選択
+            line.reply_messages(rt, [_tmpl_choice_msg("kintai")])
             return
-        if t in COMMUTE_SUBMIT_CMDS:                  # 経費提出ボタン → 次のファイルを経費扱い
-            business.set_expect_type(uid, "commute")
-            line.reply(rt, T("expect_file", label=type_label("commute")))
+        if t in COMMUTE_SUBMIT_CMDS:                  # 経費提出ボタン → 様式選択
+            line.reply_messages(rt, [_tmpl_choice_msg("commute")])
             return
+        if t.startswith(("正規", "その他様式")):       # 様式選択の応答
+            handled = _handle_tmpl_choice(uid, t, rt)
+            if handled:
+                return
+        if t in OTHER_CANCEL_CMDS and business.has_pending(uid) and business.get_expect_type(uid):
+            business.clear_pending(uid)               # チェック失敗後のキャンセル
+            business.clear_expect_type(uid)
+            line.reply(rt, T("raw_cancel"))
+            return
+        if t in ("そのまま提出", "直接上传"):          # チェック失敗後の「その他様式として提出」
+            if business.has_pending(uid) and business.get_expect_type(uid):
+                data = business.pending_bytes(uid)
+                type2 = business.get_expect_type(uid)
+                business.clear_pending(uid)
+                business.clear_expect_type(uid)
+                if data is None:
+                    line.reply(rt, T("submit_fail"))
+                else:
+                    ext, mime = s3util.detect_format(data)
+                    _do_submit_unchecked(uid, type2, data, rt, ext, mime)
+                return
         tword = business.infer_type(t, t)            # 待分类文件 + 类型词 → 校验并转正
         if tword and business.has_pending(uid):
             data = business.pending_bytes(uid)
@@ -234,6 +253,39 @@ def _do_submit_other(uid, data, rt, ext, mime, purpose):
     line.reply(rt, T("other_ok", period=_fmt_period(period), purpose=purpose or "—"))
 
 
+def _tmpl_choice_msg(type_):
+    lbl = type_label(type_)
+    return assist.quick_reply(
+        T("tmpl_choice", label=lbl),
+        [("✅ 正規テンプレ", "正規 " + ("勤怠" if type_ == "kintai" else "経費")),
+         ("📎 その他様式", "その他様式 " + ("勤怠" if type_ == "kintai" else "経費"))])
+
+
+def _handle_tmpl_choice(uid, t, rt):
+    """「正規 勤怠」「その他様式 経費」等 → expectType/expectRaw を設定。処理したら True。"""
+    raw = t.startswith("その他様式")
+    rest = t.replace("その他様式", "", 1).replace("正規", "", 1)
+    type_ = business.infer_type(rest, rest)
+    if not type_:
+        return False
+    business.set_expect_type(uid, type_, raw=raw)
+    line.reply(rt, T("expect_file_raw" if raw else "expect_file", label=type_label(type_)))
+    return True
+
+
+def _do_submit_unchecked(uid, type_, data, rt, ext, mime):
+    """その他様式：内容チェックなしで保存。年月はファイルから読めれば採用、無理なら当月。"""
+    period = None
+    if ext == "xlsx":
+        fp = business.file_period(type_, data)
+        if fp and fp in (business.current_period(), business.prev_period()):
+            period = fp
+    period = period or business.current_period()
+    period, _, resubmit = business.save_submission(uid, type_, data, period, ext=ext, mime=mime)
+    line.reply(rt, T("submit_ok_unchecked", period=_fmt_period(period), label=type_label(type_)))
+    _maybe_notify_resubmit(uid, period, type_, resubmit)
+
+
 def _handle_file(uid, ev, rt):
     data = line.download_content(ev.get("messageId"))
     if not data:
@@ -245,10 +297,14 @@ def _handle_file(uid, ev, rt):
         _do_submit_other(uid, data, rt, ext, mime, om.get("purpose", ""))
         return
     et = business.get_expect_type(uid)               # 「勤怠提出／経費提出」ボタンで種別確定済み
+    raw_mode = business.get_expect_raw(uid) if et else False
     fname = ev.get("fileName") or ""
     type_ = et or business.infer_type(fname, "")
     if et:
         business.clear_expect_type(uid)
+    if type_ and raw_mode:                           # その他様式 → チェックなしで保存
+        _do_submit_unchecked(uid, type_, data, rt, ext, mime)
+        return
     if not type_:                                    # 类型判不出 → 暂存待用户说明
         business.stash_pending(uid, fname or ("file." + ext), data)
         line.reply(rt, T("ask_type"))
@@ -267,6 +323,15 @@ def _do_submit_raw(uid, type_, data, rt, ext, mime):
     _maybe_notify_resubmit(uid, period, type_, resubmit)
 
 
+def _reject_with_raw_offer(uid, type_, data, rt, err_text):
+    """チェック不合格：ファイルを退避し「そのまま提出（チェックなし）」の選択肢を提示。"""
+    business.stash_pending(uid, "file.xlsx", data)
+    business.set_expect_type(uid, type_, raw=True)
+    line.reply_messages(rt, [assist.quick_reply(
+        err_text + "\n\n" + T("offer_raw"),
+        [("📎 そのまま提出", "そのまま提出"), ("❌ キャンセル", "キャンセル")])])
+
+
 def _do_submit(uid, type_, data, rt):
     """提出の検証→保存→返信（年月／氏名チェック、休日勤務の注意）。
 
@@ -278,11 +343,12 @@ def _do_submit(uid, type_, data, rt):
     cur, prv = business.current_period(), business.prev_period()
     lbl = type_label(type_)
     if fp is None:
-        line.reply(rt, T("period_unreadable", label=lbl))
+        _reject_with_raw_offer(uid, type_, data, rt, T("period_unreadable", label=lbl))
         return
     if fp not in (cur, prv):
-        line.reply(rt, T("period_mismatch", label=lbl, found=_fmt_period(fp),
-                         expected="%s／%s" % (_fmt_period(prv), _fmt_period(cur))))
+        _reject_with_raw_offer(uid, type_, data, rt,
+                               T("period_mismatch", label=lbl, found=_fmt_period(fp),
+                                 expected="%s／%s" % (_fmt_period(prv), _fmt_period(cur))))
         return
     period = fp                                   # ファイルの年月で格納
     # 2) 氏名チェック（勤務表のみ・不一致は保存しない）

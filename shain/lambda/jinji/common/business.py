@@ -532,11 +532,19 @@ def record_submission(user_id, type_, period, s3_key, file_name, fmt="xlsx"):
     })
 
 
+def emp_id(user_id):
+    """該当者の社員ID（roster 逆引き）。無ければ空。"""
+    r = roster_of(user_id)
+    return (r or {}).get("empId", "")
+
+
 def save_submission(user_id, type_, data, period=None, ext="xlsx", mime=None):
-    """存提交物（允许重复提交，支持 xlsx 以外 PDF/画像）。返回 (period, key, resubmit)。"""
+    """存提交物（允许重复提交，支持 xlsx 以外 PDF/画像）。返回 (period, key, resubmit)。
+    ファイル名は 社員ID_氏名（同姓同名対策）。"""
     period = period or current_period()
     resubmit = _has_submission(user_id, period, type_)
-    key, fname = s3util.put_submission(period, type_, emp_name(user_id), data, ext, mime)
+    key, fname = s3util.put_submission(period, type_, emp_name(user_id), data, ext, mime,
+                                       eid=emp_id(user_id))
     record_submission(user_id, type_, period, key, fname, fmt=ext)
     return period, key, resubmit
 
@@ -594,10 +602,11 @@ def save_other_submission(user_id, data, ext, mime, purpose, period=None):
 
 # ---------------- 提出予定タイプ（「勤怠提出／経費提出」ボタン → 次のファイルの種別） ----------------
 
-def set_expect_type(user_id, type_):
+def set_expect_type(user_id, type_, raw=False):
     db.employees().update_item(
         Key={"userId": user_id},
-        UpdateExpression="SET expectType=:t", ExpressionAttributeValues={":t": type_})
+        UpdateExpression="SET expectType=:t, expectRaw=:r",
+        ExpressionAttributeValues={":t": type_, ":r": "1" if raw else "0"})
 
 
 def get_expect_type(user_id):
@@ -605,11 +614,16 @@ def get_expect_type(user_id):
     return e.get("expectType") if e else None
 
 
+def get_expect_raw(user_id):
+    e = get_employee(user_id)
+    return bool(e and e.get("expectRaw") == "1")
+
+
 def clear_expect_type(user_id):
     e = get_employee(user_id)
     if e and e.get("expectType"):
         db.employees().update_item(Key={"userId": user_id},
-                                   UpdateExpression="REMOVE expectType")
+                                   UpdateExpression="REMOVE expectType, expectRaw")
 
 
 # ---------------- 待分类暂存 ----------------
@@ -630,7 +644,8 @@ def resolve_pending(user_id, type_, period=None):
         return None
     period = period or current_period()
     resubmit = _has_submission(user_id, period, type_)
-    key, fname = s3util.copy_to_submission(link["pendingKey"], period, type_, emp_name(user_id))
+    key, fname = s3util.copy_to_submission(link["pendingKey"], period, type_, emp_name(user_id),
+                                           eid=emp_id(user_id))
     record_submission(user_id, type_, period, key, fname)
     db.employees().update_item(
         Key={"userId": user_id},

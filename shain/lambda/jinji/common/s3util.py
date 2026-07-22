@@ -68,26 +68,29 @@ def _safe(part):
     return (part or "").replace(":", "_").replace("/", "_").strip()
 
 
-def submission_filename(period, type_, name, ext="xlsx"):
+def submission_filename(period, type_, name, ext="xlsx", eid=""):
+    """ファイル名に社員ID を含める（同姓同名対策）：勤務表（E003_山田太郎）_YYYYMM.xlsx"""
     meta = TYPE_META[type_]
     nm = _safe(name) or "noname"
+    if eid:
+        nm = "%s_%s" % (_safe(eid), nm)
     if type_ == "commute":
-        # 交通費経費【YYYY年MM月+氏名】.{ext}
+        # 交通費経費【YYYY年MM月+社員ID_氏名】.{ext}
         return "交通費経費【%s年%s月%s】.%s" % (period[:4], period[4:], nm, ext)
     return "%s（%s）_%s.%s" % (meta["label"], nm, period, ext)
 
 
-def submission_key(period, type_, name, ext="xlsx"):
+def submission_key(period, type_, name, ext="xlsx", eid=""):
     yyyy, mm = period[:4], period[4:]
     meta = TYPE_META[type_]
     return "hr/%s/%s/%s/%s" % (yyyy, mm, meta["folder"],
-                               submission_filename(period, type_, name, ext))
+                               submission_filename(period, type_, name, ext, eid))
 
 
-def put_submission(period, type_, name, data, ext="xlsx", mime=None):
+def put_submission(period, type_, name, data, ext="xlsx", mime=None, eid=""):
     """存入提交物（带类型 + 生命周期标签），返回 (key, filename)。
-    ext/mime 支持 xlsx 以外（PDF/画像）。"""
-    key = submission_key(period, type_, name, ext)
+    ext/mime 支持 xlsx 以外（PDF/画像）。eid=社員ID（文件名防重名）。"""
+    key = submission_key(period, type_, name, ext, eid)
     _s3.put_object(Bucket=config.BUCKET_NAME, Key=key, Body=data,
                    ContentType=mime or XLSX_MIME, Tagging=SUBMISSION_TAG)
     return key, key.rsplit("/", 1)[-1]
@@ -152,9 +155,9 @@ def read_object(key):
         return None
 
 
-def copy_to_submission(pending_k, period, type_, name):
+def copy_to_submission(pending_k, period, type_, name, eid=""):
     """把暂存文件转正到 hr/ 路径（带类型 + 标签），删除暂存，返回 (key, filename)。"""
-    key = submission_key(period, type_, name)
+    key = submission_key(period, type_, name, eid=eid)
     _s3.copy_object(
         Bucket=config.BUCKET_NAME,
         CopySource={"Bucket": config.BUCKET_NAME, "Key": pending_k},

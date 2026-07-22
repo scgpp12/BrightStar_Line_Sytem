@@ -38,6 +38,7 @@ _HELP_ENTRIES = [
     ("催促[{p}] … 未提出者に督促", "催促[{p}] … 给未提交者发提醒", "催促", "催促"),
     ("済 E003 … メール受領を手動で提出済みに", "済 E003 … 手动标为已交(邮件收到)", None, None),
     ("一括DL … 当月の提出を一括DL", "一括DL … 打包下载当月提交", "一括DL", "一括DL"),
+    ("個別DL E003 E004 … 選んだ人だけDL", "個別DL E003 E004 … 只下载指定人", None, None),
     ("催促予約 … 日時指定で自動催促", "催促予約 … 预约定时催促", "催促予約", "催促予約"),
     ("一斉送信 … 全社員へお知らせ（管理者のみ）", "一斉送信 … 给全员群发（仅管理员）", "一斉送信", "一斉送信"),
     ("本日認証 … 当日の本人確認", "本日認証 … 当天本人确认", "認証", "認証"),
@@ -398,6 +399,9 @@ def _route(ev, base=""):
         if canon == "roster_status" or _is_roster_cmd(t):
             line.reply_messages(rt, _hr_roster_messages(business.normalize_period(t)))
             return
+        if t.startswith(("個別DL", "個別ＤＬ", "个别DL", "個別dl")):   # 選んだ人だけzip
+            line.reply_messages(rt, [_kobetsu_download_msg(t, base)])
+            return
         if canon == "bulk_dl" or _is_bulk_cmd(t):
             line.reply_messages(rt, [_bulk_download_msg(business.normalize_period(t), base)])
             return
@@ -580,11 +584,15 @@ def _hr_missing_messages(text):
     period = business.normalize_period(text)
     mm = business.missing_all_types(period)
     items = []
+    _short = {"kintai": "勤", "commute": "経"}
+    _word = {"kintai": "勤怠", "commute": "経費"}
     for eid in sorted(mm):
-        if len(items) >= 13:
-            break
         nm = mm[eid]["emp"].get("name", eid)
-        items.append(("済 " + nm[:17], "済 " + eid))
+        for tp in mm[eid]["missing_types"]:
+            if len(items) >= 13:
+                break
+            items.append(("済 %s(%s)" % (nm[:14], _short.get(tp, tp)),
+                          "済 %s %s" % (eid, _word.get(tp, tp))))
     if not items:
         return [{"type": "text", "text": body}]
     if len(mm) > 13:
@@ -657,6 +665,43 @@ def _bulk_download_msg(period, base):
         text="%s の提出 %d 件をまとめました" % (_fmt_period(period), n),
         actions=[{"label": "全件ダウンロード(zip)", "uri": _dl_link(base, zipkey)}],
     )
+
+
+def _kobetsu_download_msg(text, base):
+    """個別DL E003 E004 [202607] → 指定者の当月(または指定月)提出だけを zip。"""
+    import re, time
+    period = business.normalize_period(text)
+    toks = [x for x in re.split(r"[\s　]+", text.strip()) if x][1:]
+    toks = [x for x in toks if not re.match(r"^20\d{4}$", x)]      # 月指定を除外
+    people, missed = [], []
+    for q in toks:
+        r = business.roster_resolve(q)
+        (people if r else missed).append(r or q)
+    if not people:
+        return {"type": "text", "text": T("kobetsu_usage")}
+    keys, names, nofile = [], [], []
+    for p in people:
+        luid = p.get("lineUserId")
+        items = [it for it in (business.my_submissions(luid) if luid else [])
+                 if it.get("period") == period and it.get("s3Key")]
+        if items:
+            keys += [it["s3Key"] for it in items]
+            names.append(p.get("name", p.get("empId", "")))
+        else:
+            nofile.append(p.get("name", p.get("empId", "")))
+    if not keys:
+        return {"type": "text", "text": T("kobetsu_none", period=_fmt_period(period))}
+    zipname = "select_%s_%s" % (period, str(int(time.time()))[-6:])
+    zipkey, n = s3util.build_keys_zip(keys, zipname)
+    note = ""
+    if nofile:
+        note += "\n" + T("kobetsu_nofile", names="、".join(nofile))
+    if missed:
+        note += "\n" + T("kobetsu_notfound", names="、".join(str(x) for x in missed))
+    return line.buttons_message(
+        alt_text="個別ダウンロード",
+        text=("%s 分・%s の %d 件%s" % (_fmt_period(period), "、".join(names), n, note))[:160],
+        actions=[{"label": "ダウンロード(zip)", "uri": _dl_link(base, zipkey)}])
 
 
 def _hr_remind(uid, text):
