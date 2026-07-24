@@ -382,6 +382,14 @@ def _route(ev, base=""):
             return
         # 催促予約（「催促」より先に判定：語が包含されるため）
         if t.startswith(("催促予約", "予約催促", "预约催促")):
+            dt_str = _parse_book_dt(t)               # 「催促予約 2026-07-25 09:00」直接入力(PC向け)
+            if dt_str == "past":
+                line.reply(rt, T("book_past"))
+                return
+            if dt_str:
+                bid, _ = business.booking_add(dt_str, created_by=business.emp_name(uid) or uid)
+                line.reply(rt, T("book_done", when=dt_str.replace("T", " "), bid=bid))
+                return
             line.reply_messages(rt, [_book_picker()])
             return
         if t.startswith(("予約確認", "予約一覧", "预约确认")):
@@ -471,6 +479,35 @@ def _bcast_flow(uid, t, bc, rt):
 
 
 # ---------------- 催促予約（日時ピッカー） ----------------
+
+def _parse_book_dt(t):
+    """「催促予約 2026-07-25 09:00」等の直接入力 → 'YYYY-MM-DDTHH:MM'。
+    年省略（7/25 9:00）は今年（過去なら翌年）。日時なし→None、過去→'past'。"""
+    import re
+    from datetime import datetime, timezone, timedelta
+    jst = timezone(timedelta(hours=9))
+    now = datetime.now(jst)
+    m = re.search(r"(20\d{2})[/\-年.](\d{1,2})[/\-月.](\d{1,2})日?[\s　]+(\d{1,2})[:時](\d{2})?", t)
+    if m:
+        y, mo, d, h = int(m.group(1)), int(m.group(2)), int(m.group(3)), int(m.group(4))
+        mi = int(m.group(5) or 0)
+    else:
+        m = re.search(r"(\d{1,2})[/月.](\d{1,2})日?[\s　]+(\d{1,2})[:時](\d{2})?", t)
+        if not m:
+            return None
+        mo, d, h = int(m.group(1)), int(m.group(2)), int(m.group(3))
+        mi = int(m.group(4) or 0)
+        y = now.year
+    try:
+        dt = datetime(y, mo, d, h, mi, tzinfo=jst)
+    except ValueError:
+        return None
+    if m.lastindex and y == now.year and dt < now and "20%d" % (y % 100) not in t and str(y) not in t:
+        dt = dt.replace(year=y + 1)              # 年省略で過去 → 翌年扱い
+    if dt < now:
+        return "past"
+    return dt.strftime("%Y-%m-%dT%H:%M")
+
 
 def _book_picker():
     from datetime import datetime, timezone, timedelta
