@@ -441,8 +441,8 @@ def _route(ev, base=""):
         return
 
     if mtype in ("file", "image"):
-        line.reply(rt, "📄 勤怠・通勤費の提出は「社員アシスタント」をご利用ください。\n"
-                       "考勤·通勤费的提交请用「社員アシスタント」。")
+        line.reply(rt, "📄 勤怠・通勤費の提出は「BS社員管理」をご利用ください。\n"
+                       "考勤·通勤费的提交请用「BS社員管理」。")
         return
 
 
