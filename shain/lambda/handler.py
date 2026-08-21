@@ -240,11 +240,18 @@ def _dispatch(ev, base):
     today = authlib.today_jst()
 
     # ---- ①.5 総務からの配信への「確認しました」 ----
-    if mtype == "text" and text.startswith(("確認 ", "確認　", "已确认 ")):
+    # 新方式＝postback（配信IDはトークに出ない）。旧方式のテキストも当面受け付ける。
+    bid = ""
+    if mtype == "postback" and (ev.get("data") or "").startswith("confirm="):
+        bid = (ev.get("data") or "").split("=", 1)[1].strip()
+    elif mtype == "text" and text.startswith(("確認 ", "確認　", "已确认 ")):
         bid = text.split(maxsplit=1)[-1].strip()
+    if bid:
         ok = _confirm_broadcast(uid, bid, name)
         jline.reply(rt, "✅ ご確認ありがとうございます！総務に共有しました😊"
                     if ok else "確認の記録に失敗しました。お手数ですが総務までご連絡ください🙏")
+        return
+    if mtype == "postback":            # 未知の postback は無視（テキスト扱いさせない）
         return
 
     # ---- ② 言語：選択ワード → 設定 → モードチューザー ----

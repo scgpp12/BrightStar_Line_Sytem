@@ -69,6 +69,14 @@ def parse_events(body_text):
                 "messageId": None, "fileName": None,
                 "event": "unsubscribe", "eventKey": None, "replyToken": reply_token,
             })
+        elif etype == "postback":                    # ボタン応答（data はトークに出ない）
+            pb = ev.get("postback", {}) or {}
+            out.append({
+                "fromUser": from_user, "msgType": "postback", "content": "",
+                "messageId": None, "fileName": None,
+                "data": pb.get("data", ""), "params": pb.get("params") or {},
+                "event": None, "eventKey": None, "replyToken": reply_token,
+            })
     return out
 
 

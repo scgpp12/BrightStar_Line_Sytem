@@ -741,6 +741,12 @@ def batch_latest():
     return sorted(items, key=lambda x: x.get("createdAt", ""))[-1]
 
 
+def batch_recent(n=5):
+    """新しい順の配信一覧（確認状況を ID なしで選ばせるため）。"""
+    items = db.broadcasts().scan().get("Items", [])
+    return sorted(items, key=lambda x: x.get("createdAt", ""), reverse=True)[:n]
+
+
 def batch_confirm(bid, uid, name=""):
     """社員が「確認しました」を押したとき（shain 側からも同型で書く）。"""
     db.broadcasts().update_item(

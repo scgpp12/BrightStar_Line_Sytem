@@ -351,6 +351,10 @@ def _route(ev, base=""):
 
     # 日時ピッカーの応答（催促予約の確定）
     if mtype == "postback":
+        data = ev.get("data") or ""
+        if data.startswith("confstat="):          # 他の配信の確認状況（IDは裏で持つ）
+            line.reply_messages(rt, [_confirm_status_msg(data.split("=", 1)[1], base)])
+            return
         if ev.get("data") == "book_remind":
             dt_str = (ev.get("params") or {}).get("datetime")
             if dt_str:
@@ -405,7 +409,11 @@ def _route(ev, base=""):
             line.reply(rt, T("del_cancel"))
             return
         if t.startswith(("確認状況", "既読確認", "确认状况")):
-            line.reply_messages(rt, [_confirm_status_msg(t, base)])
+            msgs = [_confirm_status_msg(t, base)]
+            pick = _conf_pick_msg()
+            if pick:
+                msgs.append(pick)
+            line.reply_messages(rt, msgs)
             return
         if t.startswith(("削除確定", "删除确定")):        # 削除の実行
             line.reply(rt, _handle_delete(uid, t, confirm=True))
@@ -704,13 +712,29 @@ def _handle_delete(uid, raw, confirm=False):
              period=_fmt_period(period), label=type_label(type_))
 
 
+def _batch_label(item):
+    """配信を人が読める形で表す（ID は使わない）。例：催促 08/21 14:30"""
+    when = (item.get("createdAt", "") or "")[:16].replace("T", " ")
+    return ("%s %s" % (item.get("kind", "配信"), when[5:]))[:20]
+
+
+def _conf_pick_msg(exclude=""):
+    """他の配信を ID なしで選ばせる QuickReply（postback で bid を裏に持つ）。"""
+    items = [(_batch_label(b), "confstat=%s" % b.get("bcastId", ""), _batch_label(b))
+             for b in business.batch_recent(6) if b.get("bcastId") != exclude]
+    if not items:
+        return None
+    return assist.quick_reply_postback(T("conf_pick"), items[:5])
+
+
 def _confirm_status_msg(text, base):
-    """確認状況 [ID] → 確認済/未確認の件数 + CSV（未確認者リスト付き）。"""
+    """確認状況 [ID] → 確認済/未確認の件数 + CSV（未確認者リスト付き）。
+    ID は総務にも見せない。指定なしなら最新、他を見たいときは QuickReply から選ぶ。"""
     import re, csv, io as _io, time
     m = re.search(r"([0-9a-f]{6})", text)
     item = business.batch_get(m.group(1)) if m else business.batch_latest()
     if not item:
-        return {"type": "text", "text": T("conf_none") if not m else T("conf_not_found", bid=m.group(1))}
+        return {"type": "text", "text": T("conf_none")}
     done, yet = business.batch_stats(item)
     bid = item.get("bcastId", "")
     buf = _io.StringIO()
@@ -721,9 +745,9 @@ def _confirm_status_msg(text, base):
     for d in yet:
         w.writerow(["未確認", d.get("eid", ""), d.get("name", ""), ""])
     data = ("\ufeff" + buf.getvalue()).encode("utf-8")
-    key = s3util.put_export("確認状況_%s_%s.csv" % (bid, str(int(time.time()))[-6:]), data)
+    key = s3util.put_export("確認状況_%s.csv" % str(int(time.time()))[-6:], data)
     body = T("conf_stat", kind=item.get("kind", ""), when=(item.get("createdAt", "") or "")[:16],
-             total=len(done) + len(yet), done=len(done), yet=len(yet), bid=bid)
+             total=len(done) + len(yet), done=len(done), yet=len(yet))
     return line.buttons_message(alt_text="確認状況", text=body[:160],
                                 actions=[{"label": T("conf_csv_btn")[:20],
                                           "uri": _dl_link(base, key)}])

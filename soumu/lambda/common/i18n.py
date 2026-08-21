@@ -206,19 +206,22 @@ _T = {
         "zh": "辛苦了😊\n{period} 的{label}因内容有不备，已被撤回🙏\n麻烦修正后重新提交，有疑问请联系总务。",
     },
     "confirm_btn": {"ja": "✅ 確認しました", "zh": "✅ 已确认"},
+    # postback の displayText（トークに出る本人の発言。内部IDは出さない）
+    "confirm_done_disp": {"ja": "確認しました", "zh": "已确认"},
+    "conf_pick": {"ja": "▼ 他の配信の確認状況を見る", "zh": "▼ 查看其他配信的确认状况"},
     "confirm_hint": {
         "ja": "※ ご確認いただけましたら、下の「確認しました」をタップしてください🙏",
         "zh": "※ 看到后请点下方「已确认」按钮🙏",
     },
     "batch_report_id": {
-        "ja": "\n確認状況の確認：「確認状況 {bid}」と送信（ID: {bid}）",
-        "zh": "\n查看确认状况：发送「確認状況 {bid}」（ID: {bid}）",
+        "ja": "\n※「確認状況」と送信すると、この配信を何名が確認したか分かります。",
+        "zh": "\n※ 发送「確認状況」即可查看本次配信有多少人已确认。",
     },
     "conf_none": {"ja": "配信履歴がありません。", "zh": "没有配信记录。"},
     "conf_not_found": {"ja": "配信 {bid} が見つかりません。", "zh": "未找到配信 {bid}。"},
     "conf_stat": {
-        "ja": "📊 確認状況（{kind} / {when}）\n対象 {total}名：確認済 {done}名 ／ 未確認 {yet}名\nID: {bid}",
-        "zh": "📊 确认状况（{kind} / {when}）\n对象 {total}名：已确认 {done}名 ／ 未确认 {yet}名\nID: {bid}",
+        "ja": "📊 確認状況（{kind} / {when}）\n対象 {total}名：確認済 {done}名 ／ 未確認 {yet}名",
+        "zh": "📊 确认状况（{kind} / {when}）\n对象 {total}名：已确认 {done}名 ／ 未确认 {yet}名",
     },
     "conf_csv_btn": {"ja": "確認状況をCSVでダウンロード", "zh": "下载确认状况CSV"},
     "manual_more": {

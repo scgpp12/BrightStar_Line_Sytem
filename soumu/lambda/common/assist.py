@@ -89,6 +89,21 @@ def quick_reply(text, items):
     return msg
 
 
+def quick_reply_postback(text, items):
+    """items: [(label, data, display_text), ...]（最大13）。
+
+    message アクションと違い、押しても data（内部ID等）はトークに出ず、
+    display_text だけが本人の発言として表示される。"""
+    qr = [{"type": "action",
+           "action": {"type": "postback", "label": lbl[:20],
+                      "data": data, "displayText": disp}}
+          for lbl, data, disp in items[:13]]
+    msg = {"type": "text", "text": text}
+    if qr:
+        msg["quickReply"] = {"items": qr}
+    return msg
+
+
 def lang_chooser(name=""):
     head = ("✅ 認証OK：%s\n" % name) if name else ""
     return quick_reply(head + "言語を選んでください / 请选择语言（默认日语）",
