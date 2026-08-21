@@ -39,6 +39,9 @@ _HELP_ENTRIES = [
     ("済 E003 … メール受領を手動で提出済みに", "済 E003 … 手动标为已交(邮件收到)", None, None),
     ("一括DL … 当月の提出を一括DL", "一括DL … 打包下载当月提交", "一括DL", "一括DL"),
     ("個別DL E003 E004 … 選んだ人だけDL", "個別DL E003 E004 … 只下载指定人", None, None),
+    ("未提出CSV[{p}] … 未提出者を表計算で出力", "未提出CSV[{p}] … 未提交者导出表格", "未提出CSV", "未提出CSV"),
+    ("削除 氏名 勤務表 … 不備ファイルを取り消し", "削除 姓名 勤務表 … 撤回不合格文件", None, None),
+    ("確認状況 … 催促/一斉送信の既読(確認)状況", "確認状況 … 催促/群发的确认状况", "確認状況", "確認状況"),
     ("催促予約 … 日時指定で自動催促", "催促予約 … 预约定时催促", "催促予約", "催促予約"),
     ("一斉送信 … 全社員へお知らせ（管理者のみ）", "一斉送信 … 给全员群发（仅管理员）", "一斉送信", "一斉送信"),
     ("本日認証 … 当日の本人確認", "本日認証 … 当天本人确认", "認証", "認証"),
@@ -398,8 +401,23 @@ def _route(ev, base=""):
         if t.startswith(("予約取消", "予約キャンセル", "取消预约")):
             line.reply(rt, _book_cancel(t))
             return
+        if t in ("キャンセル", "取消", "cancel") and not business.bcast_get(uid):
+            line.reply(rt, T("del_cancel"))
+            return
+        if t.startswith(("確認状況", "既読確認", "确认状况")):
+            line.reply_messages(rt, [_confirm_status_msg(t, base)])
+            return
+        if t.startswith(("削除確定", "删除确定")):        # 削除の実行
+            line.reply(rt, _handle_delete(uid, t, confirm=True))
+            return
+        if t.startswith(("削除", "取消提出", "删除")):        # 削除の確認
+            line.reply_messages(rt, _handle_delete_confirm(uid, t))
+            return
         if t.startswith(("済", "済解除")):            # 手動「済」＝催促除外（メール等で受領）
             line.reply(rt, _handle_manual_ok(uid, t))
+            return
+        if t.startswith(("未提出CSV", "未提出csv", "未提出リスト", "未提出一覧DL", "未提交CSV", "CSV", "csv")):
+            line.reply_messages(rt, [_missing_csv_msg(t, base)])
             return
         if canon == "missing" or any(k in t for k in ("未提出", "未提交", "谁没交", "誰が出して", "未提出者")):
             line.reply_messages(rt, _hr_missing_messages(t))   # 済ボタン付き
@@ -411,7 +429,13 @@ def _route(ev, base=""):
             line.reply_messages(rt, [_kobetsu_download_msg(t, base)])
             return
         if canon == "bulk_dl" or _is_bulk_cmd(t):
-            line.reply_messages(rt, [_bulk_download_msg(business.normalize_period(t), base)])
+            p = business.normalize_period(t)
+            months = [(("%s-%s" % (x[:4], x[4:])), "一括DL %s" % x)
+                      for x in _recent_periods(6) if x != p][:5]
+            msgs = [_bulk_download_msg(p, base)]
+            if months:
+                msgs.append(assist.quick_reply(T("bulk_other_month"), months))
+            line.reply_messages(rt, msgs)
             return
         line.reply(rt, _route_text(uid, ev.get("content", ""), lang, canon))
         return
@@ -582,18 +606,143 @@ def _mark_unreg(has_line):
     return "" if has_line else "  " + T("line_unregistered")
 
 
+_CIRCLED = "①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮⑯⑰⑱⑲⑳㉑㉒㉓㉔㉕㉖㉗㉘㉙㉚㉛㉜㉝㉞㉟㊱㊲㊳㊴㊵㊶㊷㊸㊹㊺㊻㊼㊽㊾㊿"
+
+
+def _no(i):
+    """1始まりの連番マーク。50を超えたら (n) 形式。"""
+    return _CIRCLED[i - 1] if 1 <= i <= len(_CIRCLED) else "(%d)" % i
+
+
+def _recent_periods(n=6):
+    """当月から遡って n ヶ月の period リスト。"""
+    cur = business.current_period()
+    y, m = int(cur[:4]), int(cur[4:])
+    out = []
+    for _ in range(n):
+        out.append("%04d%02d" % (y, m))
+        m -= 1
+        if m == 0:
+            y, m = y - 1, 12
+    return out
+
+
+def _missing_csv_msg(text, base):
+    """未提出者一覧を CSV（Excel で開ける UTF-8-SIG）にして DL ボタンを返す。"""
+    import csv, io as _io, time
+    period = business.normalize_period(text)
+    mm = business.missing_all_types(period)
+    if not mm:
+        return {"type": "text", "text": T("missing_csv_none", period=_fmt_period(period))}
+    buf = _io.StringIO()
+    w = csv.writer(buf, quoting=csv.QUOTE_ALL, lineterminator="\r\n")
+    w.writerow(["No", "社員番号", "氏名", "部署", "属性", "未提出の種別", "LINE連携", "対象月"])
+    for i, eid in enumerate(sorted(mm), 1):
+        v = mm[eid]
+        e = v["emp"]
+        w.writerow([i, eid, e.get("name", ""), e.get("department", ""),
+                    e.get("attribute", ""),
+                    "、".join(type_label(t) for t in v["missing_types"]),
+                    "連携済" if v.get("linked") else "未登録",
+                    _fmt_period(period)])
+    data = ("\ufeff" + buf.getvalue()).encode("utf-8")
+    name = "未提出一覧_%s_%s.csv" % (period, str(int(time.time()))[-6:])
+    key = s3util.put_export(name, data)
+    return line.buttons_message(
+        alt_text="未提出者一覧CSV",
+        text=T("missing_csv_ready", period=_fmt_period(period), n=len(mm)),
+        actions=[{"label": "CSVをダウンロード", "uri": _dl_link(base, key)}])
+
+
+def _parse_del(raw):
+    """「削除 E003 勤務表 202607」→ (person, type_, period)。person 未特定なら None。"""
+    import re
+    parts = [p for p in re.split(r"[\s　]+", (raw or "").strip()) if p][1:]
+    parts = [p for p in parts if not re.match(r"^20\d{4}$", p)] or parts
+    period = business.normalize_period(raw)
+    who = parts[0] if parts else None
+    rest = " ".join(parts[1:]) if len(parts) > 1 else ""
+    type_ = business.infer_type(rest, rest)
+    person = business.roster_resolve(who) if who else None
+    return person, type_, period
+
+
+def _handle_delete_confirm(uid, raw):
+    person, type_, period = _parse_del(raw)
+    if not person or not type_:
+        return [{"type": "text", "text": T("del_usage")}]
+    item = business.find_submission(person, period, type_)
+    if not item:
+        return [{"type": "text", "text": T("del_none", name=person.get("name", ""),
+                                           period=_fmt_period(period), label=type_label(type_))}]
+    body = T("del_confirm", name=person.get("name", ""), eid=person.get("empId", ""),
+             period=_fmt_period(period), label=type_label(type_),
+             file=item.get("fileName", "—"))
+    key = "削除確定 %s %s %s" % (person.get("empId", ""),
+                                "勤務表" if type_ == "kintai" else "交通費", period)
+    return [assist.quick_reply(body, [("🗑 削除する", key), ("❌ キャンセル", "キャンセル")])]
+
+
+def _handle_delete(uid, raw, confirm=False):
+    person, type_, period = _parse_del(raw)
+    if not person or not type_:
+        return T("del_usage")
+    ok, fname = business.delete_submission(person, period, type_)
+    if not ok:
+        return T("del_none", name=person.get("name", ""),
+                 period=_fmt_period(period), label=type_label(type_))
+    # 本人へ「再提出のお願い」を社員botから通知（reminder Lambda 経由）
+    luid = person.get("lineUserId")
+    fn = config.REMINDER_FUNCTION_NAME or os.environ.get("REMINDER_FUNCTION_NAME")
+    if luid and fn:
+        _lambda_client().invoke(
+            FunctionName=fn, InvocationType="Event",
+            Payload=json.dumps({"trigger": "notify", "to": luid,
+                                "text": T("del_notice_emp", period=_fmt_period(period),
+                                          label=type_label(type_))}).encode("utf-8"))
+    return T("del_done", name=person.get("name", ""), eid=person.get("empId", ""),
+             period=_fmt_period(period), label=type_label(type_))
+
+
+def _confirm_status_msg(text, base):
+    """確認状況 [ID] → 確認済/未確認の件数 + CSV（未確認者リスト付き）。"""
+    import re, csv, io as _io, time
+    m = re.search(r"([0-9a-f]{6})", text)
+    item = business.batch_get(m.group(1)) if m else business.batch_latest()
+    if not item:
+        return {"type": "text", "text": T("conf_none") if not m else T("conf_not_found", bid=m.group(1))}
+    done, yet = business.batch_stats(item)
+    bid = item.get("bcastId", "")
+    buf = _io.StringIO()
+    w = csv.writer(buf, quoting=csv.QUOTE_ALL, lineterminator="\r\n")
+    w.writerow(["状態", "社員番号", "氏名", "確認日時(UTC)"])
+    for d in done:
+        w.writerow(["確認済", d.get("eid", ""), d.get("name", ""), d.get("at", "")])
+    for d in yet:
+        w.writerow(["未確認", d.get("eid", ""), d.get("name", ""), ""])
+    data = ("\ufeff" + buf.getvalue()).encode("utf-8")
+    key = s3util.put_export("確認状況_%s_%s.csv" % (bid, str(int(time.time()))[-6:]), data)
+    body = T("conf_stat", kind=item.get("kind", ""), when=(item.get("createdAt", "") or "")[:16],
+             total=len(done) + len(yet), done=len(done), yet=len(yet), bid=bid)
+    return line.buttons_message(alt_text="確認状況", text=body[:160],
+                                actions=[{"label": T("conf_csv_btn")[:20],
+                                          "uri": _dl_link(base, key)}])
+
+
 def _hr_missing(text):
     """未提出一覧のテキスト。行頭に社員番号（済 コマンド／ボタンで使う）。"""
     period = business.normalize_period(text)
     only = business.infer_type(text, text)
+    total = len(business.roster_people())
     lines = ["■ 未提出（%s）" % _fmt_period(period)]
     if only:
         miss = business.missing(period, only)
         if not miss:
             return T("all_submitted")
+        lines.append(T("summary_line", total=total, done=total - len(miss), pending=len(miss)))
         lines.append("【%s】" % type_label(only))
-        for e in miss:
-            lines.append("・%s %s（%s）%s" % (e.get("empId", ""),
+        for i, e in enumerate(miss, 1):
+            lines.append("%s%s %s（%s）%s" % (_no(i), e.get("empId", ""),
                                             e.get("name", ""),
                                             e.get("department", ""),
                                             _mark_unreg(e.get("lineUserId"))))
@@ -603,11 +752,12 @@ def _hr_missing(text):
     mm = business.missing_all_types(period)
     if not mm:
         return T("all_submitted")
-    for eid in sorted(mm):
+    lines.append(T("summary_line", total=total, done=total - len(mm), pending=len(mm)))
+    for i, eid in enumerate(sorted(mm), 1):
         v = mm[eid]
         e = v["emp"]
         labels = "、".join(type_label(t) for t in v["missing_types"])
-        lines.append("・%s %s（%s）— 未: %s%s" % (eid, e.get("name", ""),
+        lines.append("%s%s %s（%s）— 未: %s%s" % (_no(i), eid, e.get("name", ""),
                                                 e.get("department", ""), labels,
                                                 _mark_unreg(v.get("linked"))))
     lines.append("")
@@ -630,11 +780,12 @@ def _hr_missing_messages(text):
                 break
             items.append(("済 %s(%s)" % (nm[:14], _short.get(tp, tp)),
                           "済 %s %s" % (eid, _word.get(tp, tp))))
+    csv_btn = ("📄 CSVで出す", "未提出CSV %s" % period)
     if not items:
-        return [{"type": "text", "text": body}]
+        return [assist.quick_reply(body, [csv_btn])]
     if len(mm) > 13:
         body += "\n" + T("manual_more")
-    return [assist.quick_reply(body, items)]
+    return [assist.quick_reply(body, [csv_btn] + items[:12])]
 
 
 ROSTER_CMDS_KW = ("一覧", "一览", "全員", "全员", "提出状況", "提交情况")
@@ -650,16 +801,17 @@ def _is_bulk_cmd(t):
     return any(k in tl for k in BULK_CMDS_KW)
 
 
-def _emp_line(r):
+def _emp_line(r, idx=None):
     e = r["emp"]
+    head = _no(idx) if idx else "・"
     def _mk(it):
         if not it:
             return "✗"
         return "✓(手)" if isinstance(it, dict) and it.get("manual") else "✓"
     marks = " ".join("%s%s" % (type_label(t), _mk(it)) for t, it in r["types"].items())
     tail = "" if r.get("linked") else "  " + T("line_unregistered")
-    return "・%s %s（%s） %s%s" % (e.get("empId", ""), e.get("name", ""),
-                                 e.get("department", ""), marks, tail)
+    return "%s%s %s（%s） %s%s" % (head, e.get("empId", ""), e.get("name", ""),
+                                  e.get("department", ""), marks, tail)
 
 
 def _hr_roster_messages(period):
@@ -670,12 +822,14 @@ def _hr_roster_messages(period):
     pending = [r for r in rows if any(it is None for it in r["types"].values())]
     done = [r for r in rows if all(it is not None for it in r["types"].values())]
 
-    lines = ["■ 提出状況（%s）" % _fmt_period(period), ""]
+    lines = ["■ 提出状況（%s）" % _fmt_period(period)]
+    lines.append(T("summary_line", total=len(rows), done=len(done), pending=len(pending)))
+    lines.append("")
     lines.append("【未提出 %d名】" % len(pending))
-    lines += [_emp_line(r) for r in pending] if pending else ["（なし）"]
+    lines += [_emp_line(r, i) for i, r in enumerate(pending, 1)] if pending else ["（なし）"]
     lines.append("")
     lines.append("【提出済 %d名】" % len(done))
-    lines += [_emp_line(r) for r in done] if done else ["（なし）"]
+    lines += [_emp_line(r, i) for i, r in enumerate(done, 1)] if done else ["（なし）"]
     lines.append("")
     lines.append("💾 全件まとめてDL →「一括DL」と送信")
 

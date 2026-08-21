@@ -33,3 +33,8 @@ def submissions():
 def bookings():
     """催促予約（総務が日時ピッカーで登録）。"""
     return _resource.Table(config.BOOKINGS_TABLE)
+
+
+def broadcasts():
+    """配信バッチ（催促/一斉送信）と既読確認の記録。"""
+    return _resource.Table(config.BROADCASTS_TABLE)

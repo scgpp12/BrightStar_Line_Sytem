@@ -177,3 +177,15 @@ def build_keys_zip(keys, zipname):
     _s3.put_object(Bucket=config.BUCKET_NAME, Key=zipkey, Body=buf.getvalue(),
                    ContentType="application/zip")
     return zipkey, len(keys)
+
+
+def put_export(name, data, content_type="text/csv; charset=utf-8"):
+    """任意のエクスポート物（CSV等）を exports/ に置いて key を返す（3日で自動削除）。"""
+    key = "exports/%s" % _safe(name)
+    _s3.put_object(Bucket=config.BUCKET_NAME, Key=key, Body=data, ContentType=content_type)
+    return key
+
+
+def delete_object(key):
+    """S3 オブジェクトを削除（バージョニング有効なので旧版は残る）。"""
+    _s3.delete_object(Bucket=config.BUCKET_NAME, Key=key)

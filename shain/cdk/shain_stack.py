@@ -80,6 +80,8 @@ class ShainStack(Stack):
             "LINE_TOKEN_PARAM": line_token_param,
             # 社員ルーター
             "SHAIN_SESSION_TABLE": session.table_name,
+            # 総務(soumu)の配信テーブル：一斉送信/催促の「確認しました」を記録
+            "BROADCASTS_TABLE": f"brightstar-soumu-{stage}-broadcasts",
         }
 
         webhook = lambda_.Function(
@@ -105,6 +107,7 @@ class ShainStack(Stack):
             f"{kprefix}-groups",
             f"{jprefix}-employees", f"{jprefix}-roster", f"{jprefix}-submissions",
             f"{jprefix}-auth",
+            f"brightstar-soumu-{stage}-broadcasts",
         ]
         ro_tables = [f"{kprefix}-knowledge"]
         table_resources = [tarn(n) for n in rw_tables + ro_tables]

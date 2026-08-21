@@ -30,10 +30,10 @@ CH = {
     "shain": {
         "token": "/brightstar-shain/dev/line/token",
         "rows": 2, "cols": 3, "h": 1000, "bar": "メニュー",
-        "btns": [("勤怠提出", "勤怠提出", TEAL), ("経費提出", "経費提出", TEAL),
+        "btns": [("勤務表提出", "勤怠提出", TEAL), ("交通費提出", "交通費提出", TEAL),
                  ("その他経費", "その他経費", GOLD),
                  ("履歴", "履歴", SLATE), ("研修", "研修", SLATE),
-                 ("人事", "人事", SLATE)],
+                 ("総務", "総務", SLATE)],
     },
     "soumu": {
         "token": "/brightstar-soumu/dev/line/token",

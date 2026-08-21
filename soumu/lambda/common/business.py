@@ -688,3 +688,77 @@ def roster_status(period):
             "linked": bool(luid),
         })
     return rows
+
+
+# ---------------- 提出物の削除（総務が不備ファイルを取り消す） ----------------
+
+def find_submission(person, period, type_):
+    """花名册の1名について、指定月・種別の提出レコードを返す（無ければ None）。"""
+    luid = person.get("lineUserId")
+    if not luid:
+        return None
+    r = db.submissions().get_item(Key={"userId": luid, "sk": "%s#%s" % (period, type_)})
+    return r.get("Item")
+
+
+def delete_submission(person, period, type_):
+    """S3 実体 + DynamoDB レコードを削除。返り値 (ok, fileName)。"""
+    item = find_submission(person, period, type_)
+    if not item:
+        return False, None
+    key = item.get("s3Key")
+    if key:
+        try:
+            s3util.delete_object(key)
+        except Exception as e:  # noqa: BLE001
+            print("s3 delete fail:", key, repr(e))
+    db.submissions().delete_item(
+        Key={"userId": person["lineUserId"], "sk": "%s#%s" % (period, type_)})
+    return True, item.get("fileName") or (key or "").rsplit("/", 1)[-1]
+
+
+# ---------------- 配信バッチ & 既読確認（催促／一斉送信） ----------------
+
+def batch_create(kind, by, targets, text=""):
+    """targets=[{uid,eid,name}]。返り値 bcastId（短い16進）。"""
+    import uuid
+    bid = uuid.uuid4().hex[:6]
+    db.broadcasts().put_item(Item={
+        "bcastId": bid, "kind": kind, "by": by or "", "text": (text or "")[:900],
+        "targets": targets, "confirmed": {}, "createdAt": _now_iso(),
+    })
+    return bid
+
+
+def batch_get(bid):
+    return db.broadcasts().get_item(Key={"bcastId": bid}).get("Item")
+
+
+def batch_latest():
+    items = db.broadcasts().scan().get("Items", [])
+    if not items:
+        return None
+    return sorted(items, key=lambda x: x.get("createdAt", ""))[-1]
+
+
+def batch_confirm(bid, uid, name=""):
+    """社員が「確認しました」を押したとき（shain 側からも同型で書く）。"""
+    db.broadcasts().update_item(
+        Key={"bcastId": bid},
+        UpdateExpression="SET confirmed.#u = :v",
+        ExpressionAttributeNames={"#u": uid},
+        ExpressionAttributeValues={":v": {"at": _now_iso(), "name": name or ""}})
+
+
+def batch_stats(item):
+    """(確認済リスト, 未確認リスト) を返す。要素は {uid,eid,name,at?}。"""
+    conf = item.get("confirmed") or {}
+    done, yet = [], []
+    for t in item.get("targets") or []:
+        c = conf.get(t.get("uid"))
+        if c:
+            d = dict(t); d["at"] = (c or {}).get("at", "")
+            done.append(d)
+        else:
+            yet.append(dict(t))
+    return done, yet

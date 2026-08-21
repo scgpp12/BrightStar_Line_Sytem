@@ -69,6 +69,15 @@ export class BrightstarSoumuStack extends cdk.Stack {
 
     // ---------------- Lambda ----------------
     const code = lambda.Code.fromAsset(path.join(__dirname, "../../lambda"));
+    // ---------------- 配信バッチ/既読確認テーブル（#10） ----------------
+    const broadcasts = new dynamodb.Table(this, "BroadcastsTable", {
+      tableName: `${appName}-${stage}-broadcasts`,
+      partitionKey: { name: "bcastId", type: dynamodb.AttributeType.STRING },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      encryption: dynamodb.TableEncryption.AWS_MANAGED,
+      removalPolicy: stage === "prod" ? cdk.RemovalPolicy.RETAIN : cdk.RemovalPolicy.DESTROY,
+    });
+
     const commonEnv: Record<string, string> = {
       APP_NAME: appName,
       STAGE: stage,
@@ -78,6 +87,7 @@ export class BrightstarSoumuStack extends cdk.Stack {
       SUBMISSIONS_TABLE: `${hrPrefix}-submissions`,
       SUBMISSIONS_GSI1: "GSI1",
       BOOKINGS_TABLE: `${appName}-${stage}-bookings`,
+      BROADCASTS_TABLE: `${appName}-${stage}-broadcasts`,
       BUCKET_NAME: `${hrPrefix}-${this.account}`,
       PRESIGN_TTL: "3600",
       HR_USERIDS: hrUserIds,
@@ -123,6 +133,8 @@ export class BrightstarSoumuStack extends cdk.Stack {
     submissions.grantReadData(reminderFn);
     bookings.grantReadWriteData(webhookFn);            // 催促予約の登録/取消
     bookings.grantReadWriteData(reminderFn);           // ポーラーが実行済みへ更新
+    broadcasts.grantReadWriteData(webhookFn);          // 確認状況の参照
+    broadcasts.grantReadWriteData(reminderFn);         // 配信バッチの作成
     reminderFn.grantInvoke(webhookFn);
 
     // 読 SSM SecureString（2参数）+ SSM 経由 KMS 解密

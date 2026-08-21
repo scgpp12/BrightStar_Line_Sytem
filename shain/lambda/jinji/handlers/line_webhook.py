@@ -144,8 +144,9 @@ def _route(ev, base=""):
             business.set_other_mode(uid, "file", t)
             line.reply(rt, T("other_ask_file", purpose=t))
             return
-        if t in KINTAI_SUBMIT_CMDS:                   # 勤怠提出ボタン → 様式選択
-            line.reply_messages(rt, [_tmpl_choice_msg("kintai")])
+        if t in KINTAI_SUBMIT_CMDS:                   # 勤務表：チェックなしで受付
+            business.set_expect_type(uid, "kintai", raw=True)
+            line.reply(rt, T("expect_file", label=type_label("kintai")))
             return
         if t in COMMUTE_SUBMIT_CMDS:                  # 経費提出ボタン → 様式選択
             line.reply_messages(rt, [_tmpl_choice_msg("commute")])
@@ -179,8 +180,10 @@ def _route(ev, base=""):
                 line.reply(rt, T("submit_fail"))
             else:
                 ext, mime = s3util.detect_format(data)
-                if ext == "xlsx":
+                if ext == "xlsx" and tword != "kintai":
                     _do_submit(uid, tword, data, rt)
+                elif ext == "xlsx":
+                    _do_submit_unchecked(uid, tword, data, rt, ext, mime)
                 else:
                     _do_submit_raw(uid, tword, data, rt, ext, mime)
             return
@@ -309,8 +312,11 @@ def _handle_file(uid, ev, rt):
         business.stash_pending(uid, fname or ("file." + ext), data)
         line.reply(rt, T("ask_type"))
         return
-    if ext == "xlsx":
-        _do_submit(uid, type_, data, rt)             # xlsx → 完整内容校验
+    if ext == "xlsx" and type_ != "kintai":
+        _do_submit(uid, type_, data, rt)             # 交通費 xlsx → 完整内容校验
+    elif ext == "xlsx":
+        # 勤務表：様式変更（2026-08）に伴い内容チェックは行わず、年月だけ見て格納
+        _do_submit_unchecked(uid, type_, data, rt, ext, mime)
     else:
         _do_submit_raw(uid, type_, data, rt, ext, mime)  # PDF/画像 → 存档、跳过校验
 

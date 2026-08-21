@@ -16,6 +16,7 @@ EMPLOYEES_TABLE = os.environ.get("EMPLOYEES_TABLE", f"{APP_NAME}-{STAGE}-employe
 ROSTER_TABLE = os.environ.get("ROSTER_TABLE", f"{APP_NAME}-{STAGE}-roster")
 SUBMISSIONS_TABLE = os.environ.get("SUBMISSIONS_TABLE", f"{APP_NAME}-{STAGE}-submissions")
 BOOKINGS_TABLE = os.environ.get("BOOKINGS_TABLE", f"{APP_NAME}-{STAGE}-bookings")
+BROADCASTS_TABLE = os.environ.get("BROADCASTS_TABLE", f"{APP_NAME}-{STAGE}-broadcasts")
 SUBMISSIONS_GSI1 = os.environ.get("SUBMISSIONS_GSI1", "GSI1")
 
 # S3

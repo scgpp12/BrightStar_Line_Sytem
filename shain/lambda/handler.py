@@ -30,7 +30,9 @@ from kenshu.handlers import webhook as kenshu_web
 KENSHU, JINJI = "kenshu", "jinji"
 
 KENSHU_WORDS = {"研修", "研修メニュー", "研修モード", "研修アシスタント", "けんしゅう", "📚研修"}
-JINJI_WORDS = {"人事", "人事メニュー", "人事モード", "勤怠", "通勤費", "通勤费", "経費", "交通費", "交通费", "提出", "🗂️人事"}
+JINJI_WORDS = {"総務", "総務メニュー", "総務モード", "🗂️総務",
+               "人事", "人事メニュー", "人事モード", "🗂️人事",   # 後方互換
+               "勤怠", "通勤費", "通勤费", "経費", "交通費", "交通费", "提出"}
 # 人事(提出)系ボタン：人事モードへ固定しつつ原文を jinji に委譲（メニュー表示ではなく実処理）
 SHAIN_SUBMIT_WORDS = {"勤怠提出", "経費提出", "交通費提出", "作業時間記録簿提出",
                       "その他経費", "履歴", "テンプレ"}
@@ -38,17 +40,17 @@ SHAIN_SUBMIT_WORDS = {"勤怠提出", "経費提出", "交通費提出", "作業
 CHOOSER = (
     "本日のご利用メニューを選んでください👇\n"
     "・「研修」… 研修の受講・お申込み\n"
-    "・「人事」… 勤怠・通勤費の提出 / テンプレ / 履歴\n"
+    "・「総務」… 勤務表・交通費の提出 / テンプレ / 履歴\n"
     "────────\n"
     "请选择今天要用的功能：\n"
     "・发「研修」… 研修报名\n"
-    "・发「人事」… 考勤·通勤费提交/模板/履历"
+    "・发「総務」… 考勤·交通费提交/模板/履历"
 )
 
 SHAIN_INTENTS = dict(assist.COMMON_INTENTS)
 SHAIN_INTENTS.update({
     "kenshu": set(KENSHU_WORDS) | {"training", "study", "培训", "연수", "교육"},
-    "jinji": set(JINJI_WORDS) | {"hr", "attendance", "考勤", "인사", "근태"},
+    "jinji": set(JINJI_WORDS) | {"hr", "soumu", "attendance", "考勤", "인사", "근태"},
 })
 
 
@@ -56,19 +58,19 @@ def _shain_chooser(name, lang):
     if lang == "ja":
         txt = ((("%s さん\n" % name) if name else "")
                + "本日のご利用メニューを選んでください👇\n"
-                 "・研修：受講・お申込み\n・人事：勤怠・通勤費の提出 / テンプレ / 履歴")
+                 "・研修：受講・お申込み\n・総務：勤務表・交通費の提出 / テンプレ / 履歴")
     else:
         txt = ((("%s\n" % name) if name else "")
-               + "请选择今天要用的功能👇\n・研修：报名/咨询\n・人事：考勤·通勤费提交/模板/履历")
-    return assist.quick_reply(txt, [("📚 研修", "研修"), ("🗂️ 人事", "人事"), ("❓ヘルプ", "ヘルプ")])
+               + "请选择今天要用的功能👇\n・研修：报名/咨询\n・総務：考勤·交通费提交/模板/履历")
+    return assist.quick_reply(txt, [("📚 研修", "研修"), ("🗂️ 総務", "総務"), ("❓ヘルプ", "ヘルプ")])
 
 
 def _shain_help(lang):
     title = "■ 社員メニュー（ボタンをタップ）" if lang == "ja" else "■ 社员菜单（点按钮）"
     entries = [
         ("研修 … 研修の受講・お申込み", "研修 … 报名/咨询", "📚 研修", "研修"),
-        ("人事 … 勤怠・通勤費の提出", "人事 … 考勤·通勤费提交", "🗂️ 人事", "人事"),
-        ("Excel を送る → 人事へ提出（再提出も可）", "发 Excel → 人事提交（可重复）", None, None),
+        ("総務 … 勤務表・交通費の提出", "総務 … 考勤·交通费提交", "🗂️ 総務", "総務"),
+        ("Excel を送る → 総務へ提出（再提出も可）", "发 Excel → 総務提交（可重复）", None, None),
         ("登録解除 … 別人で登録し直す", "登録解除 … 换人重新登记", None, None),
     ]
     return assist.help_message(lang, title, entries)
@@ -164,6 +166,30 @@ def _kenshu_msg(ev, *, as_event=False):
             "eventKey": ev.get("eventKey") or ""}
 
 
+# ---------------- 一斉送信/催促の「確認しました」記録 ----------------
+BROADCASTS_TABLE = os.environ.get("BROADCASTS_TABLE", "")
+
+
+def _confirm_broadcast(uid, bid, name):
+    """総務からの配信に対する既読(確認)を記録。成功なら True。"""
+    if not (BROADCASTS_TABLE and bid):
+        return False
+    try:
+        from datetime import datetime, timezone
+        _ddb_res = boto3.resource("dynamodb", region_name=jconfig.REGION)
+        _ddb_res.Table(BROADCASTS_TABLE).update_item(
+            Key={"bcastId": bid},
+            UpdateExpression="SET confirmed.#u = :v",
+            ExpressionAttributeNames={"#u": uid},
+            ExpressionAttributeValues={
+                ":v": {"at": datetime.now(timezone.utc).isoformat(), "name": name or ""}},
+            ConditionExpression="attribute_exists(bcastId)")
+        return True
+    except Exception as e:  # noqa: BLE001
+        print("confirm error:", repr(e))
+        return False
+
+
 def _dispatch(ev, base):
     uid = ev.get("fromUser")
     if not uid:
@@ -212,6 +238,14 @@ def _dispatch(ev, base):
 
     name = emp.get("name") or ""
     today = authlib.today_jst()
+
+    # ---- ①.5 総務からの配信への「確認しました」 ----
+    if mtype == "text" and text.startswith(("確認 ", "確認　", "已确认 ")):
+        bid = text.split(maxsplit=1)[-1].strip()
+        ok = _confirm_broadcast(uid, bid, name)
+        jline.reply(rt, "✅ ご確認ありがとうございます！総務に共有しました😊"
+                    if ok else "確認の記録に失敗しました。お手数ですが総務までご連絡ください🙏")
+        return
 
     # ---- ② 言語：選択ワード → 設定 → モードチューザー ----
     if mtype == "text":

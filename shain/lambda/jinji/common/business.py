@@ -40,8 +40,22 @@ def prev_period():
     return "%04d%02d" % (y - 1, 12) if m == 1 else "%04d%02d" % (y, m - 1)
 
 
+# 勤務表(新様式 2026-08)：年=J1 / 月=L1（旧様式 B5 も後方互換で読む）
+KINTAI_YEAR_CELL, KINTAI_MONTH_CELL = "J1", "L1"
+
+
 def file_period(type_, data):
-    """提出ファイル内の年月セル（勤務表B5／交通費経費B1）→ 'yyyymm'。読めなければ None。"""
+    """提出ファイル内の年月 → 'yyyymm'。読めなければ None（勤務表は判定のみ・拒否しない）。"""
+    if type_ == "kintai":
+        try:
+            y = int(str(xlsx.read_cell(data, KINTAI_YEAR_CELL) or "").strip())
+            mo = int(str(xlsx.read_cell(data, KINTAI_MONTH_CELL) or "").strip())
+            if 2000 <= y <= 2100 and 1 <= mo <= 12:
+                return "%04d%02d" % (y, mo)
+        except (TypeError, ValueError):
+            pass
+        ym = xlsx.cell_year_month(data, "B5")        # 旧様式フォールバック
+        return None if ym is None else "%04d%02d" % ym
     ref = PERIOD_CELL.get(type_)
     ym = xlsx.cell_year_month(data, ref) if ref else None
     return None if ym is None else "%04d%02d" % ym

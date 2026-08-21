@@ -147,6 +147,13 @@ def datetime_picker_message(alt_text, text, label, data, initial=None, min_dt=No
     }
 
 
+def push_message(user_id, message, token=None):
+    """任意のメッセージオブジェクト（QuickReply 付きテキスト等）を push。"""
+    if user_id.startswith(USER_PREFIX):
+        user_id = user_id[len(USER_PREFIX):]
+    return _post(_API + "/push", {"to": user_id, "messages": [message]}, token=token)
+
+
 def push(user_id, text, token=None):
     """user_id 可带或不带 line: 前缀。
     token 指定时用该 token 推送（催促を社員channelのbotから送る等）。未指定は自channel。"""
