@@ -23,3 +23,6 @@ secrets.*
 
 # 生成物
 tools/preview_*.png
+
+# 図の中間生成物（tools/arch_diagram.py で再生成可能）
+docs/architecture/_render.html
