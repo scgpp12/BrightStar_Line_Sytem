@@ -5,6 +5,7 @@ import * as dynamodb from "aws-cdk-lib/aws-dynamodb";
 import * as s3 from "aws-cdk-lib/aws-s3";
 import * as s3deploy from "aws-cdk-lib/aws-s3-deployment";
 import * as lambda from "aws-cdk-lib/aws-lambda";
+import * as logs from "aws-cdk-lib/aws-logs";
 import * as iam from "aws-cdk-lib/aws-iam";
 import * as events from "aws-cdk-lib/aws-events";
 import * as targets from "aws-cdk-lib/aws-events-targets";
@@ -154,6 +155,8 @@ export class BrightstarHrStack extends cdk.Stack {
       code,
       memorySize: 256,
       timeout: cdk.Duration.seconds(29),
+      // ログに氏名等が出るため無期限保持にしない（月次業務1周期を追える30日）
+      logRetention: logs.RetentionDays.ONE_MONTH,
       environment: commonEnv,
     });
 
@@ -203,6 +206,7 @@ export class BrightstarHrStack extends cdk.Stack {
       code,
       memorySize: 256,
       timeout: cdk.Duration.seconds(120),
+      logRetention: logs.RetentionDays.ONE_MONTH,
       environment: {
         ...commonEnv,
         TOKEN_PARAM_KENSHU: tokenParamKenshu,

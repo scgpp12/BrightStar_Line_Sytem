@@ -4,6 +4,7 @@ import { Construct } from "constructs";
 import * as dynamodb from "aws-cdk-lib/aws-dynamodb";
 import * as s3 from "aws-cdk-lib/aws-s3";
 import * as lambda from "aws-cdk-lib/aws-lambda";
+import * as logs from "aws-cdk-lib/aws-logs";
 import * as iam from "aws-cdk-lib/aws-iam";
 import * as events from "aws-cdk-lib/aws-events";
 import * as targets from "aws-cdk-lib/aws-events-targets";
@@ -107,6 +108,8 @@ export class BrightstarSoumuStack extends cdk.Stack {
       code,
       memorySize: 256,
       timeout: cdk.Duration.seconds(60),
+      // ログに氏名等が出るため無期限保持にしない（月次業務1周期を追える30日）
+      logRetention: logs.RetentionDays.ONE_MONTH,
       // 催促は社員(shain)のtokenで送る → リマインドは社員アシスタントに届く
       environment: { ...commonEnv, PUSH_TOKEN_PARAM: shainTokenParam },
     });
@@ -119,6 +122,7 @@ export class BrightstarSoumuStack extends cdk.Stack {
       code,
       memorySize: 512,                                 // 一括DL の zip 生成に余裕
       timeout: cdk.Duration.seconds(29),
+      logRetention: logs.RetentionDays.ONE_MONTH,
       environment: { ...commonEnv, REMINDER_FUNCTION_NAME: reminderFn.functionName },
     });
 

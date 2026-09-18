@@ -13,6 +13,7 @@ from aws_cdk import (
     aws_dynamodb as ddb,
     aws_lambda as lambda_,
     aws_iam as iam,
+    aws_logs as logs,
 )
 from constructs import Construct
 
@@ -93,6 +94,8 @@ class ShainStack(Stack):
             code=lambda_.Code.from_asset("../lambda"),
             memory_size=512,                       # 添付DLの zip 余裕 + 起動高速化
             timeout=Duration.seconds(29),
+            # ログに氏名等が出るため無期限保持にしない（月次業務1周期を追える30日）
+            log_retention=logs.RetentionDays.ONE_MONTH,
             environment=env,
         )
 

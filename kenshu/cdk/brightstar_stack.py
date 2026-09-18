@@ -16,6 +16,7 @@ from aws_cdk import (
     aws_dynamodb as ddb,
     aws_lambda as lambda_,
     aws_iam as iam,
+    aws_logs as logs,
     aws_apigatewayv2 as apigw,
     aws_events as events,
     aws_events_targets as targets,
@@ -131,6 +132,8 @@ class BrightStarStack(Stack):
                 code=lambda_.Code.from_asset("../src"),  # 无第三方依赖，直接打包 src/
                 memory_size=1024,
                 timeout=Duration.seconds(20),
+                # ログに氏名等が出るため無期限保持にしない（30日）
+                log_retention=logs.RetentionDays.ONE_MONTH,
                 environment=env,
             )
 
