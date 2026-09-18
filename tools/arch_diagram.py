@@ -183,8 +183,8 @@ for i, (nm, nid) in enumerate(ACC):
         box(COL[i] - 22, 305, 122, 52, nm + "\n公式アカウント", "#06C755", nid=nid, font=11)
 
 # ── AWS Cloud ──────────────────────────────────────────
-group(60, 410, 2000, 900, "AWS Cloud", INK, gr_icon="group_aws_cloud_alt", nid="g_aws")
-group(80, 450, 1960, 845, "ap-northeast-1", "#147EBA", gr_icon="group_region", nid="g_region")
+group(60, 410, 2000, 980, "AWS Cloud", INK, gr_icon="group_aws_cloud_alt", nid="g_aws")
+group(80, 450, 1960, 920, "ap-northeast-1", "#147EBA", gr_icon="group_region", nid="g_region")
 
 # 入口層
 box(100, 500, 1100, 44, "Lambda Function URL　authType = NONE（LINE は SigV4 を付けられないため）",
@@ -207,28 +207,28 @@ text(100, 556, 400, 32,
      10, 1, "#7A4A00")
 
 # データ層
-group(100, 970, 700, 300, "共有データ　BrightstarHr-dev が所有（他4スタックは名前で参照）",
+group(100, 1000, 700, 320, "共有データ　BrightstarHr-dev が所有（他4スタックは名前で参照）",
       C_DB, dashed=1, nid="g_shared", font=12)
 for i, (nm, nid) in enumerate([("roster\n社員名簿・PITR有", "t_roster"),
                                ("auth\n日次認証・TTL", "t_auth"),
                                ("employees\n紐付け・PITR有", "t_emp"),
                                ("submissions\n提出記録・GSI1", "t_sub")]):
-    icon(130 + i * 170, 1005, nm, "dynamodb", C_DB, nid=nid)
-icon(130, 1150, "S3　提出物・テンプレート", "s3", C_STORAGE, nid="s3")
-text(228, 1152, 540, 96,
+    icon(130 + i * 170, 1035, nm, "dynamodb", C_DB, nid=nid)
+icon(130, 1180, "S3　提出物・テンプレート", "s3", C_STORAGE, nid="s3")
+text(228, 1182, 540, 96,
      "brightstar-hr-dev-{account}\n"
      "hr/{年}/{月}/{worktimes|expenses|others}　hr/template ・ pending ・ exports\n"
      "公開遮断 / SSE-S3 / バージョニング有\n"
      "60日 → Deep Archive　365日削除", 10)
 
-group(830, 970, 500, 300, "チャネル固有データ", C_DB, dashed=1, nid="g_own", font=12)
+group(830, 1000, 500, 320, "チャネル固有データ", C_DB, dashed=1, nid="g_own", font=12)
 for i, (nm, nid) in enumerate([("session\n社員・当日モード", "t_sess"),
                                ("bookings\n催促予約", "t_book"),
                                ("broadcasts\n配信・既読確認", "t_bc")]):
-    icon(860 + i * 155, 1005, nm, "dynamodb", C_DB, nid=nid)
-icon(860, 1150, "kenshu 6表", "dynamodb", C_DB, nid="t_kenshu")
-icon(1060, 1150, "EkiCommute 2表", "dynamodb", C_DB, nid="t_eki")
-text(860, 1235, 460, 30,
+    icon(860 + i * 155, 1035, nm, "dynamodb", C_DB, nid=nid)
+icon(860, 1180, "kenshu 6表", "dynamodb", C_DB, nid="t_kenshu")
+icon(1060, 1180, "EkiCommute 2表", "dynamodb", C_DB, nid="t_eki")
+text(860, 1272, 460, 30,
      "全15表 ＝ PAY_PER_REQUEST　暗号化 ＝ AWS管理キー（CMK 不採用）", 10)
 
 # 右カラム：定期実行 / 機密 / 監視
@@ -251,18 +251,18 @@ icon(1760, 758, "CloudWatch\nLogs 30日 / アラーム10", "cloudwatch_2", C_MGM
 icon(1900, 758, "SNS\nbrightstar-ops-dev-alerts", "sns", C_APPINT, nid="sns", size=56)
 
 # ── 外部サービス（AWS 外） ────────────────────────────
-group(2100, 410, 420, 900, "外部サービス（AWS 外・すべて HTTPS）", "#B8860B", dashed=1,
+group(2140, 410, 420, 980, "外部サービス（AWS 外・すべて HTTPS）", "#B8860B", dashed=1,
       nid="g_ext", font=12)
 EXT = [("企業微信 / WeChat\n研修のみ・API GW /wechat", "x_wecom"),
        ("Zoom API\n研修の開講リンク発行", "x_zoom"),
        ("駅探（ekitan）\n営業・通勤経路の取得", "x_eki"),
        ("sons02 メール校正\n人事からリンク誘導のみ", "x_mail")]
 for i, (nm, nid) in enumerate(EXT):
-    box(2130, 460 + i * 90, 360, 60, nm, "#B8860B", nid=nid, fill="#FFFBEF", font=11)
-icon(2130, 830, "Amazon Location\ngeo-places（住所→最寄駅）", "location_service", C_NET,
+    box(2170, 460 + i * 90, 360, 60, nm, "#B8860B", nid=nid, fill="#FFFBEF", font=11)
+icon(2170, 830, "Amazon Location\ngeo-places（住所→最寄駅）", "location_service", C_NET,
      nid="x_loc", size=56)
 
-note(2130, 960, 360, 330,
+note(2170, 960, 360, 330,
      "外部依存の扱い\n"
      "・駅探は HTML 構造の変更で壊れる想定。\n"
      "　データ源の差し替えを契約事項としている\n"
@@ -306,74 +306,84 @@ edge("u_tool", "ep_furl", "SigV4", GRAY,
      exit_=("0.5", "1"), entry=("1", "0.5"),
      points=[(1476, 470), (1240, 470), (1240, 522)])
 
+# ── 配線の車線割り当て ───────────────────────────────────────────
+#   アイコン本体を一切貫通させないため、線が通れる帯を先に決めて割り当てる。
+#   アイコンは 78px 角、その下 37px がラベル帯。よって使える帯は
+#     Lambda 1段目の下  y=740〜795（EventBridge アイコンの隙間 732〜771 と重なる部分を使う）
+#     Lambda 2段目の下  y=920〜995（データ層の上端 1000 まで）
+#     データ表の下      y=1155〜1175
+#   縦の通路は列と列の隙間だけを使う：
+#     70 / 92（AWS 枠の左外）、250 / 465（データ表の隙間 208〜300・378〜470）
+#     460 / 470 / 480（Lambda 列 438〜580 の隙間）
+#     920 / 935（営業列の右 878〜1020）、1350 / 1365（研修ラベルの右〜定期実行枠の左）
+#     1390 / 1400 / 1410（定期実行枠の内側・アイコン 1420 の左）
+#     2070 / 2080 / 2100 / 2115（AWS 枠 2060 と外部枠 2140 の間）
+
 # ① 本人確認：shain → roster
 edge("l_shain", "t_roster", "①", BLUE, exit_=("0.5", "1"), entry=("0.5", "0"),
-     points=[(CX[0], 960), (169, 960)])
-# ② 提出：shain → S3（左の外側を通してアイコンを避ける）
+     points=[(CX[0], 987), (169, 987)])
+# ② 提出：shain → S3（AWS 枠の左外を降りる）
 edge("l_shain", "s3", "②", GREEN, exit_=("0", "0.5"), entry=("0", "0.5"),
-     points=[(92, 659), (92, 1189)])
-# ③ 回収：soumu → submissions
-edge("l_soumu", "t_sub", "③", BLUE, exit_=("0.5", "1"), entry=("0.5", "0"),
-     points=[(CX[1], 960), (679, 960)])
-# ⑥ DL：soumu → S3
-edge("l_soumu", "s3", "⑥", GREEN, exit_=("0", "0.5"), entry=("1", "0.5"),
-     points=[(340, 659), (340, 1189)])
+     points=[(92, 659), (92, 1219)])
+# ③ 回収：soumu → submissions（真下は soumu-reminder なので右へ逃がす）
+edge("l_soumu", "t_sub", "③", BLUE, exit_=("1", "0.5"), entry=("0.5", "0"),
+     points=[(460, 659), (460, 971), (717, 971)])
+# ⑥ DL：soumu → S3（表の隙間 x=465 を降り、ラベル帯の下 y=1165 を通る）
+edge("l_soumu", "s3", "⑥", GREEN, exit_=("1", "0.5"), entry=("0.5", "0"),
+     points=[(465, 659), (465, 1165), (169, 1165)])
 # ⑤ 既読確認：reminder → broadcasts
 edge("l_rem", "t_bc", "⑤", PINK, exit_=("1", "0.5"), entry=("0.5", "0"),
-     points=[(830, 839), (830, 950), (1209, 950)])
-# ④ push は社員チャネルの token で送る（左端を大きく迂回してアイコンを避ける）
+     points=[(470, 839), (470, 955), (1209, 955)])
+# 予約の読み書き
+edge("l_rem", "t_book", "", GRAY, dashed=1, exit_=("1", "0.5"), entry=("0.5", "0"),
+     points=[(480, 839), (480, 963), (1108, 963)])
+# ④ push は社員チャネルの token で送る（AWS 枠の外を大きく回す）
 edge("l_rem", "acc_shain", "④", PINK, exit_=("0", "0.5"), entry=("0", "0.5"),
      points=[(70, 839), (70, 331)])
-# ④⑦⑧ EventBridge → Lambda
-#   縦道 x=1345/1355/1365、横車線 y=906/920/934（Lambda 下端878 とデータ層上端970 の間）
-edge("e_rem", "l_rem", "④", ORANGE, exit_=("0", "0.5"), entry=("0.25", "1"),
-     points=[(1345, 558), (1345, 906), (380, 906)])
-edge("e_poll", "l_rem", "⑦", ORANGE, exit_=("0", "0.5"), entry=("0.75", "1"),
-     points=[(1355, 653), (1355, 920), (418, 920)])
-edge("e_rec", "l_rec", "⑧", ORANGE, exit_=("0", "0.5"), entry=("0.5", "1"),
-     points=[(1365, 748), (1365, 934), (619, 934)])
-edge("e_krem", "l_krem", "", ORANGE, exit_=("0", "0.5"), entry=("1", "0.5"))
-# 非同期 Invoke
-edge("l_soumu", "l_rem", "非同期", GRAY, dashed=1, exit_=("0.5", "1"), entry=("0.5", "0"))
-# ⑧ 紐付け解除
+# ⑧ 到達不可なら紐付け解除
 edge("l_rec", "t_roster", "⑧", ORANGE, exit_=("0.5", "1"), entry=("1", "0.5"),
-     points=[(CX[2], 945), (300, 945), (300, 1044)])
-# 参照（破線）
-# SSM は全 Lambda が起動時に読むため、線は引かず 機密情報 グループ内に注記する
-edge("l_shain", "t_sess", "", GRAY, dashed=1, exit_=("1", "0.5"), entry=("0", "0.5"),
-     points=[(240, 900), (240, 1044)])
-edge("l_rem", "t_book", "", GRAY, dashed=1, exit_=("0.5", "1"), entry=("0.5", "0"))
-edge("l_kenshu", "t_kenshu", "", GRAY, dashed=1, exit_=("0", "0.5"), entry=("1", "0.5"),
-     points=[(1340, 1189)])
-edge("l_eigyo", "t_eki", "", GRAY, dashed=1, exit_=("0.5", "1"), entry=("0.5", "0"),
-     points=[(CX[3], 1120), (1099, 1120)])
+     points=[(619, 979), (250, 979), (250, 1074)])
+# ④⑦⑧ EventBridge → Lambda（定期実行枠の内側を降り、2段目の下の車線で戻る）
+# アイコン左はラベル帯なので、右へ出して枠の外（1690〜1710）を降りる
+edge("e_rem", "l_rem", "④", ORANGE, exit_=("1", "0.5"), entry=("0.25", "1"),
+     points=[(1690, 514), (1690, 925), (380, 925)])
+edge("e_poll", "l_rem", "⑦", ORANGE, exit_=("1", "0.5"), entry=("0.75", "1"),
+     points=[(1700, 609), (1700, 935), (418, 935)])
+edge("e_rec", "l_rec", "⑧", ORANGE, exit_=("1", "0.5"), entry=("0.5", "1"),
+     points=[(1710, 704), (1710, 945), (619, 945)])
+edge("e_krem", "l_krem", "", ORANGE, exit_=("0", "0.5"), entry=("1", "0.5"),
+     points=[(1370, 799), (1370, 839)])
+# 非同期 Invoke（soumu-webhook の真下が soumu-reminder）
+edge("l_soumu", "l_rem", "非同期", GRAY, dashed=1, exit_=("0.5", "1"), entry=("0.5", "0"))
+# 監視
 edge("cw", "sns", "", GRAY, exit_=("1", "0.5"), entry=("0", "0.5"))
-# 外部サービス
+# 外部サービス（2段目の下の車線 → AWS 枠と外部枠の間の通路を上がる）
 edge("l_kenshu", "x_wecom", "", GRAY, exit_=("1", "0.5"), entry=("0", "0.5"),
-     points=[(2060, 659), (2060, 490)])
-edge("l_kenshu", "x_zoom", "", GRAY, exit_=("1", "0.5"), entry=("0", "0.5"),
-     points=[(2050, 659), (2050, 580)])
+     points=[(1350, 659), (1350, 930), (2070, 930), (2070, 490)])
+edge("l_kenshu", "x_zoom", "", GRAY, exit_=("1", "0.75"), entry=("0", "0.5"),
+     points=[(1365, 678), (1365, 938), (2080, 938), (2080, 580)])
 edge("l_eigyo", "x_eki", "", GRAY, exit_=("1", "0.5"), entry=("0", "0.5"),
-     points=[(1320, 690), (1320, 960), (2070, 960), (2070, 670)])
-edge("l_eigyo", "x_loc", "", GRAY, exit_=("1", "0.5"), entry=("0", "0.5"),
-     points=[(1330, 700), (1330, 970), (2085, 970), (2085, 858)])
-edge("l_hr", "x_mail", "", GRAY, dashed=1, exit_=("1", "0.5"), entry=("0", "0.5"),
-     points=[(1310, 680), (1310, 940), (2095, 940), (2095, 760)])
+     points=[(920, 659), (920, 948), (2100, 948), (2100, 670)])
+edge("l_eigyo", "x_loc", "", GRAY, exit_=("1", "0.75"), entry=("0", "0.5"),
+     points=[(935, 678), (935, 956), (2115, 956), (2115, 858)])
+# 以下は線を引かず、グループの所属で表す（線を増やすと可読性が落ちるため）：
+#   全 Lambda → SSM（起動時に取得）、shain → session、kenshu → kenshu6表、
+#   eigyo → EkiCommute2表、人事 → メール校正（リンク誘導のみで通信しない）
 
 # ══════════════════════════════════════════════════════════════════
 # 凡例・注記
 # ══════════════════════════════════════════════════════════════════
-group(60, 1350, 620, 180, "凡例（線の色）", "#5A6B7F", dashed=1, font=12)
+group(60, 1430, 620, 180, "凡例（線の色）", "#5A6B7F", dashed=1, font=12)
 LEG = [(BLUE, "① ③ 同期リクエスト（本人確認・回収）"),
        (GREEN, "② ⑥ S3 経路（提出・ダウンロード）"),
        (ORANGE, "④ ⑦ ⑧ EventBridge 起動（定期実行）"),
        (PINK, "⑤ 既読確認 ／ push 配信"),
        (GRAY, "経路（実線）／ 非同期 Invoke・参照（破線）")]
 for i, (c, s) in enumerate(LEG):
-    text(80, 1388 + i * 28, 60, 20, "━━━", 14, 1, c)
-    text(150, 1388 + i * 28, 520, 20, s, 11)
+    text(80, 1468 + i * 28, 60, 20, "━━━", 14, 1, c)
+    text(150, 1468 + i * 28, 520, 20, s, 11)
 
-note(710, 1350, 720, 330,
+note(710, 1430, 720, 330,
      "処理フロー（線上の番号）\n"
      "① 本人確認：「所属部署 お名前」→ roster 照合 → auth に当日認証（TTL＝当日限り）\n"
      "② 提出：Excel / PDF / 画像 → S3 に保存し submissions に記録\n"
@@ -388,7 +398,7 @@ note(710, 1350, 720, 330,
      "AWS 層は通し、アプリ層で HMAC-SHA256 の署名検証を必ず行う（BS_INF-05 §3）。\n"
      "→ チャネルシークレットの漏洩が単一障害点。SSM SecureString にのみ保持する。")
 
-note(1460, 1350, 620, 330,
+note(1460, 1430, 620, 330,
      "早期対応を推奨する課題（BS_INF 横断）\n"
      "① 企業微信の認証情報が Lambda 環境変数に平文　　　　【高】BS_INF-08 §4\n"
      "② 全 DynamoDB / S3 が RemovalPolicy.DESTROY。\n"
@@ -402,7 +412,7 @@ note(1460, 1350, 620, 330,
      "対応済（2026-09-19）：ログ保持期間 30日化・孤立ロググループ5件削除・\n"
      "CloudWatch アラーム10件と SNS 通知の新設・デプロイ同期の機械検証。")
 
-note(2100, 1350, 460, 330,
+note(2100, 1430, 460, 330,
      "所有区分（スタック依存）\n"
      "・BrightstarHr-dev（人事）が roster / auth /\n"
      "　employees / submissions / S3 / SNS を所有。\n"
@@ -421,7 +431,7 @@ xml = ('<mxfile host="app.diagrams.net" agent="brightstar-tools">'
        '<diagram name="BrightStar インフラ" id="bs-infra">'
        '<mxGraphModel dx="1400" dy="900" grid="1" gridSize="10" guides="1" tooltips="1" '
        'connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="2600" '
-       'pageHeight="1700" math="0" shadow="0"><root>'
+       'pageHeight="1830" math="0" shadow="0"><root>'
        '<mxCell id="0"/><mxCell id="1" parent="0"/>'
        + "".join(cells) +
        "</root></mxGraphModel></diagram></mxfile>")

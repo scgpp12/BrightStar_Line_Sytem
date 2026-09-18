@@ -60,11 +60,10 @@ cd kenshu/cdk && npx cdk deploy brightstar-kenshu-dev --require-approval never -
 
 # 人事（TypeScript CDK）
 cd jinji/cdk && npm install && npx cdk deploy BrightstarHr-dev --require-approval never \
-  -c masterHrPrefix=sonsik -c mailProofreadUrl="https://sons02-relay.tail5a0084.ts.net:8443/"
+  -c mailProofreadUrl="https://sons02-relay.tail5a0084.ts.net:8443/"
 
-# 総務
-cd soumu/cdk && npm install && npx cdk deploy BrightstarSoumu-dev --require-approval never \
-  -c masterHrPrefix=sonsik
+# 総務（context 不要）
+cd soumu/cdk && npm install && npx cdk deploy BrightstarSoumu-dev --require-approval never
 
 # 社員（context 不要）
 cd shain/cdk && npx cdk deploy brightstar-shain-dev --require-approval never
@@ -80,8 +79,8 @@ CDK は `tryGetContext` の戻りが `undefined` のとき**既定値（多く�
 | スタック | 必須 context | 渡し忘れた場合 |
 |---|---|---|
 | 研修 | `weComCorpId` / `weComToken` / `weComAesKey` / `weComAgentId` / `weComSecret` / `weComRelayUrl` / `weComRelayAuth` / `weComKfOpenKfId` / `teacherOpenids` / `teacherSignupCode` ほか計18 | **企業微信連携が無言で停止**。講師の signup code も失われる |
-| 人事 | `masterHrPrefix` / `mailProofreadUrl` | メール校正ツールへのリンクが消える |
-| 総務 | `masterHrPrefix` | マスター権限判定が効かなくなる |
+| 人事 | `mailProofreadUrl` | メール校正ツールへのリンクが消える |
+| 総務 | なし | — |
 | 社員・営業 | なし | — |
 
 ---

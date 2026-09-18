@@ -97,7 +97,9 @@ export class BrightstarSoumuStack extends cdk.Stack {
       HR_USERIDS: hrUserIds,
       LINE_SECRET_PARAM: lineSecretParam,
       LINE_TOKEN_PARAM: lineTokenParam,
-      // テスト用バックドア：「sonsik+YYYYMMDD」で1時間だけ総務権限（-c masterHrPrefix=sonsik）
+      // テスト用バックドア：「<prefix>+YYYYMMDD」の送信で1時間だけ総務権限を付与する。
+      // 空文字なら無効。**本番相当の運用では値を設定しない**（既定＝無効）。
+      // 使う場合のみデプロイ時に -c masterHrPrefix=<値> を渡す（値はリポジトリに置かない）。
       MASTER_HR_PREFIX: this.node.tryGetContext("masterHrPrefix") || "",
       BEDROCK_ENABLED: "false",
       TZ: "Asia/Tokyo",

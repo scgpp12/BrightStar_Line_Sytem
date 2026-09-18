@@ -242,12 +242,22 @@ $KCTX.Count / 2
 
 ### 3-6. masterHrPrefix の扱いを決める
 
-`masterHrPrefix` は `prefix + YYYYMMDD` を送ると人事権限が付与されるテスト用バックドアである。会社アカウントでは無効化を推奨する。
+`masterHrPrefix` は `prefix + YYYYMMDD` を送ると人事/総務権限が付与されるテスト用バックドアである。
+**2026-09-19 に移行元で無効化済**（context を渡さない＝空文字＝無効）。移行先でも渡さないこと。
 
 | 方針 | デプロイ時の指定 |
 |---|---|
-| 無効化（推奨） | `-c masterHrPrefix` を渡さない |
-| 継続利用 | `-c masterHrPrefix=<新しい文字列>`（移行元と同じ値は使わない） |
+| 無効化（既定・推奨） | 何も渡さない |
+| 継続利用 | `-c masterHrPrefix=<新しい文字列>`。値はリポジトリに置かない |
+
+```powershell
+foreach ($f in @("brightstar-hr-dev-webhook","brightstar-hr-dev-reconcile","brightstar-soumu-dev-webhook","brightstar-soumu-dev-reminder")) {
+  $v = aws lambda get-function-configuration --function-name $f --profile bs-new --region ap-northeast-1 --query "Environment.Variables.MASTER_HR_PREFIX" --output text
+  "{0,-34} = '{1}'" -f $f, $v
+}
+```
+
+すべて空であること。
 
 ---
 

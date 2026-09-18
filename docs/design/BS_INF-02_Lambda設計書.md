@@ -124,7 +124,7 @@ CDK の `Code.fromAsset` が**リポジトリのディレクトリをそのま�
 | # | 内容 | 対策 |
 |---|---|---|
 | 1 | **研修スタックの再デプロイで企業微信の設定が消える**。WeCom 系の値は Lambda 環境変数にしか無く、`-c` で渡さないと空文字で上書きされる | デプロイ前に**稼働中の Lambda 環境変数から値を読み戻して `-c` を組み立てる**。デプロイ後に before/after を突合して欠落が無いことを確認する（BS_INF-10 §4） |
-| 2 | 人事・総務スタックは `-c masterHrPrefix` 等を渡さないと環境変数が空になる | 同上。必須 context は BS_INF-10 §3 の表を参照 |
+| 2 | 人事スタックは `-c mailProofreadUrl` を渡さないと環境変数が空になる | 同上。必須 context は BS_INF-10 §3 の表を参照 |
 | 3 | vendoring 先を直し忘れる（`jinji/lambda/common` だけ直して社員の挙動が変わらない） | 修正時は `shain/lambda/jinji/common/` の同名ファイルも必ず確認する |
 
 ---
