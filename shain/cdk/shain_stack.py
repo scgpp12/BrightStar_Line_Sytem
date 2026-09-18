@@ -14,6 +14,9 @@ from aws_cdk import (
     aws_lambda as lambda_,
     aws_iam as iam,
     aws_logs as logs,
+    aws_sns as sns,
+    aws_cloudwatch as cloudwatch,
+    aws_cloudwatch_actions as cw_actions,
 )
 from constructs import Construct
 
@@ -154,6 +157,27 @@ class ShainStack(Stack):
 
         # ---------- Function URL（LINE webhook 入口） ----------
         fn_url = webhook.add_function_url(auth_type=lambda_.FunctionUrlAuthType.NONE)
+
+        # ---------- アラーム ----------
+        # 通知先トピックは人事スタックが所有。ARN 文字列で参照する（依存を作らない）
+        alert_topic = sns.Topic.from_topic_arn(
+            self, "AlertTopic",
+            f"arn:aws:sns:{region}:{self.account}:brightstar-ops-{stage}-alerts")
+
+        def alarm(cid, name, metric, threshold, desc):
+            a = cloudwatch.Alarm(
+                self, cid, alarm_name=name, alarm_description=desc,
+                metric=metric, threshold=threshold, evaluation_periods=1,
+                comparison_operator=cloudwatch.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
+                treat_missing_data=cloudwatch.TreatMissingData.NOT_BREACHING)
+            a.add_alarm_action(cw_actions.SnsAction(alert_topic))
+
+        alarm("ShainWebhookErrorAlarm", f"{prefix}-webhook-errors",
+              webhook.metric_errors(period=Duration.minutes(5)), 5,
+              "社員チャネルの webhook が継続的にエラー")
+        alarm("ShainWebhookThrottleAlarm", f"{prefix}-webhook-throttles",
+              webhook.metric_throttles(period=Duration.minutes(5)), 1,
+              "社員チャネルの webhook が同時実行数上限に到達")
 
         CfnOutput(self, "LineWebhookUrl", value=fn_url.url,
                   description="填到 LINE Developers > Messaging API > Webhook URL（社員）")

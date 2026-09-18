@@ -1,458 +1,437 @@
 # -*- coding: utf-8 -*-
-"""BrightStar インフラアーキテクチャ図を生成する。
+"""BrightStar インフラアーキテクチャ図（.drawio）を生成する。
 
-レイアウトを 1 箇所のデータとして持ち、そこから
-  ・SVG（→ Chrome で PNG 化）
-  ・.drawio（AWS4 公式アイコン付き・編集可能）
-の両方を出力する。両者が食い違わないようにするための構成。
+PNG は生成しない。.drawio を唯一の正とし、書き出しは drawio 本体に任せる：
+
+    wsl -e bash -lc "cd /mnt/c/.../docs/architecture && \
+      docker run --rm -v \"$PWD\":/data rlespinasse/drawio-export -f png --scale 2 <file>.drawio"
+
+作図の約束（SP_インフラアーキテクチャ図 に合わせる）
+  ・サービスは AWS4 公式アイコン（78x78・ラベルはアイコンの下）
+  ・論理的なまとまりは mxgraph.aws4.group（AWS Cloud / Region / 破線グループ）
+  ・線は orthogonalEdgeStyle + jumpStyle=arc。交差はアーチで飛び越す
+  ・アイコンを貫通させないため、出入口（exitX/entryX）と waypoint を明示する
 """
 import html
 import os
 
-OUT = r"C:\Users\sons\Downloads\aws-test\BrightStar_Line_System\docs\architecture"
-W, H = 2640, 1780
-NL = "\n"
+OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                   "..", "docs", "architecture")
+FILE = "BS_インフラアーキテクチャ図.drawio"
 
-# ---- 配色（AWS カテゴリ色） ----
-BG      = "#0E1520"
-PANEL   = "#16202E"
-LINE_GR = "#06C755"      # LINE ブランド
-C_COMP  = "#ED7100"      # Compute（Lambda）
-C_STOR  = "#7AA116"      # Storage（S3）
-C_DB    = "#C925D1"      # Database（DynamoDB）
-C_NET   = "#8C4FFF"      # Networking（API GW / Function URL / Location）
-C_APP   = "#E7157B"      # App Integration / Management
-C_SEC   = "#DD344C"      # Security（SSM / KMS）
-C_ML    = "#01A88D"      # AI/ML（Bedrock）
-TXT     = "#E6EDF6"
-MUTE    = "#8FA3BF"
-NOTE_BG = "#FFF6C6"
-NOTE_FG = "#2B2B1A"
+# AWS カテゴリ色
+C_COMPUTE = "#ED7100"
+C_NET     = "#8C4FFF"
+C_DB      = "#C925D1"
+C_STORAGE = "#7AA116"
+C_APPINT  = "#E7157B"
+C_MGMT    = "#E7157B"
+C_SEC     = "#DD344C"
+INK       = "#232F3E"
 
-RES = {
-    "lambda": "mxgraph.aws4.lambda", "apigw": "mxgraph.aws4.api_gateway",
-    "ddb": "mxgraph.aws4.dynamodb", "s3": "mxgraph.aws4.s3",
-    "evb": "mxgraph.aws4.eventbridge", "ssm": "mxgraph.aws4.systems_manager",
-    "cw": "mxgraph.aws4.cloudwatch_2", "bedrock": "mxgraph.aws4.sagemaker",
-    "loc": "mxgraph.aws4.location_service", "user": "mxgraph.aws4.users",
-}
-
-groups, nodes, edges, notes, texts = [], [], [], [], []
+cells = []
+_seq = [0]
 
 
-def G(x, y, w, h, label, color=MUTE, dash=True):
-    groups.append(dict(x=x, y=y, w=w, h=h, label=label, color=color, dash=dash))
-
-
-def N(x, y, w, h, label, color, sub="", icon="lambda", nid=None):
-    nodes.append(dict(x=x, y=y, w=w, h=h, label=label, color=color, sub=sub,
-                      icon=icon, id=nid or ("n%d" % len(nodes))))
-
-
-def E(a, b, label="", color="#7FB3FF", dash=False, t=0.5):
-    edges.append(dict(a=a, b=b, label=label, color=color, dash=dash, t=t))
-
-
-def NOTE(x, y, w, h, text):
-    notes.append(dict(x=x, y=y, w=w, h=h, text=text))
-
-
-def T(x, y, s, size=15, color=TXT, bold=False):
-    texts.append(dict(x=x, y=y, s=s, size=size, color=color, bold=bold))
-
-
-# ═══════════════ タイトル ═══════════════
-T(40, 52, "BrightStar 統合LINEアシスタント  インフラアーキテクチャ", 30, TXT, True)
-T(40, 84, "正 = BS_INF-01〜10 設計書 ／ ap-northeast-1 ・ アカウント 603319838936 ・ stage=dev", 16, MUTE)
-T(40, 108, "実機照合日 2026-09-19（Lambda 11本・DynamoDB 15表・S3 1本／デプロイ済みコードとリポジトリの md5 一致を確認済み）",
-  15, "#7ED9A0")
-
-# ═══════════════ 利用者 → LINE（チャネルごとに縦一直線） ═══════════════
-COL = [84, 334, 584, 834, 1084, 1334]
-WD = [228, 228, 228, 228, 228, 240]
-
-G(64, 140, 1530, 92, "利用者（社内 約100名）／ 役割は社員名簿(roster)の role で判定", MUTE, True)
-USERS = [("一般社員", "employee"), ("総務", "hr / soumu"), ("人事", "hr"),
-         ("営業", "sales"), ("社内ツール", "機械クライアント"), ("講師", "teacher")]
-for i, (nm, role) in enumerate(USERS):
-    N(COL[i], 168, WD[i], 52, nm, "#39506E", role, "user", nid="u%d" % i)
-
-G(64, 262, 1530, 122, "LINE Platform（同一 Provider ＝ userId が全チャネルで一致）", LINE_GR, False)
-ACCS = [("BS社員管理", "shain"), ("BS総務", "soumu"), ("BS人事", "jinji"),
-        ("BS営業", "eigyo"), (None, None), ("BS研修", "kenshu")]
-for i, (nm, key) in enumerate(ACCS):
-    if nm:
-        N(COL[i], 296, WD[i], 64, nm, LINE_GR, "公式アカウント", "user", nid="acc_" + key)
-
-# ═══════════════ AWS Cloud ═══════════════
-G(40, 408, 2020, 800, "AWS クラウド  ap-northeast-1", "#4E7FB8", False)
-
-G(64, 448, 1530, 132,
-  "公開エンドポイント層（AWS認証なし＝authType NONE／防御はアプリ層の LINE署名検証）", C_NET)
-EPS = [("Function URL" + NL + "社員", "NONE", "fu_shain"),
-       ("Function URL" + NL + "総務", "NONE", "fu_soumu"),
-       ("Function URL" + NL + "人事", "NONE", "fu_jinji"),
-       ("Function URL" + NL + "営業", "NONE", "fu_eigyo"),
-       ("Function URL" + NL + "営業API", "AWS_IAM", "fu_eigyo_api"),
-       ("API Gateway" + NL + "HTTP API（研修）", "7ルート", "apigw_kenshu")]
-for i, (nm, sub, nid) in enumerate(EPS):
-    N(COL[i], 482, WD[i], 78, nm, C_NET, sub, "apigw", nid=nid)
-
-G(64, 600, 1530, 210,
-  "Lambda 層  Python 3.12 / arm64（営業のみ x86_64）／ 外部ライブラリなし（標準ライブラリ + boto3）", C_COMP)
-L1 = [("shain-webhook", "512MB / 29s", "l_shain"),
-      ("soumu-webhook", "512MB / 29s", "l_soumu"),
-      ("hr-webhook", "256MB / 29s", "l_hr"),
-      ("eigyo LineWebhookFn", "256MB / 300s", "l_eigyo"),
-      ("eigyo ApiFn", "256MB / 300s", "l_eigyoapi"),
-      ("kenshu Line / WeChat" + NL + "Web（3関数）", "1024MB / 20s", "l_kenshu")]
-for i, (nm, sub, nid) in enumerate(L1):
-    N(COL[i], 634, WD[i], 70, nm, C_COMP, sub, "lambda", nid=nid)
-N(COL[1], 722, 228, 70, "soumu-reminder", C_COMP, "催促 / 予約 / 一斉送信", "lambda", nid="l_rem")
-N(COL[2], 722, 228, 70, "hr-reconcile", C_COMP, "日次点検 120s", "lambda", nid="l_rec")
-N(COL[5], 722, 240, 70, "kenshu Reminder", C_COMP, "開講1h前", "lambda", nid="l_krem")
-
-# --- 共有データ ---
-G(64, 830, 860, 348,
-  "共有データ  BrightstarHr-dev が所有 ／ 他4スタックは「テーブル名」で参照", C_DB)
-for i, (nm, sub, nid) in enumerate([("roster", "社員名簿・PITR有", "t_roster"),
-                                    ("auth", "日次認証・TTL", "t_auth"),
-                                    ("employees", "紐付け・PITR有", "t_emp"),
-                                    ("submissions", "提出記録・GSI1", "t_sub")]):
-    N(84 + i * 208, 872, 196, 72, nm, C_DB, sub, "ddb", nid=nid)
-N(84, 962, 400, 158, "S3", C_STOR,
-  "brightstar-hr-dev-603319838936" + NL +
-  "hr/{年}/{月}/{worktimes|expenses|others}" + NL +
-  "hr/template ・ pending ・ exports" + NL +
-  "公開遮断 / SSE-S3 / バージョニング有" + NL +
-  "60日→Deep Archive ／ 365日削除", "s3", nid="s3")
-NOTE(500, 962, 404, 158,
-     "個人情報の所在" + NL +
-     "氏名・社員番号・所属・勤務実績・通勤経路" + NL +
-     "マイナンバー / 口座 / 在留カードは扱わない" + NL + NL +
-     "横断閲覧（一覧・CSV・一括DL・削除）は" + NL +
-     "役割 hr / soumu に限定（BS_INF-07 §3）")
-
-# --- チャネル固有データ ---
-G(946, 830, 648, 348, "チャネル固有データ", C_DB)
-for i, (nm, sub, nid) in enumerate([("session", "社員・当日モード", "t_sess"),
-                                    ("bookings", "催促予約", "t_book"),
-                                    ("broadcasts", "配信・既読確認", "t_bc")]):
-    N(966 + i * 210, 872, 198, 72, nm, C_DB, sub, "ddb", nid=nid)
-N(966, 962, 408, 72, "kenshu 6表", C_DB,
-  "courses / enrollments / groups / students / results", "ddb", nid="t_kenshu")
-N(1386, 962, 188, 72, "EkiCommute 2表", C_DB, "Staff / Cache(TTL)", "ddb", nid="t_eki")
-T(966, 1070, "全15表 ＝ PAY_PER_REQUEST（月末に負荷が偏るためオンデマンド）", 14, MUTE)
-T(966, 1094, "暗号化：AWS管理キー（営業2表のみ AWS所有キー）／ CMK は不採用", 14, MUTE)
-T(966, 1118, "PITR は roster / employees / submissions のみ有効", 14, MUTE)
-
-# --- 右カラム ---
-G(1616, 448, 424, 362, "定期実行  Amazon EventBridge", C_APP)
-for i, (nm, sub, nid) in enumerate([
-        ("soumu reminder-schedule", "cron(0 0 25,28 * ? *) ＝ 毎月25/28日 9:00 JST", "e_rem"),
-        ("soumu booking-poller", "rate(10 minutes) 予約催促の実行", "e_poll"),
-        ("hr reconcile-schedule", "cron(0 15 * * ? *) ＝ 毎日 0:00 JST", "e_rec"),
-        ("kenshu ReminderTick", "rate(10 minutes) 開講1h前", "e_krem")]):
-    N(1636, 486 + i * 78, 386, 66, nm, C_APP, sub, "evb", nid=nid)
-
-G(1616, 830, 424, 160, "機密情報・暗号化", C_SEC)
-N(1636, 868, 386, 46, "SSM Parameter Store（SecureString）", C_SEC, "", "ssm", nid="ssm")
-T(1636, 938, "/{app}/dev/line/{secret,token} ×5チャネル", 13, MUTE)
-T(1636, 962, "値はソース・CDK・設計書に記載しない／CMK 不採用", 13, MUTE)
-
-G(1616, 1010, 424, 168, "監視・ログ", C_APP)
-N(1636, 1048, 386, 46, "CloudWatch Logs", C_APP, "", "cw", nid="cw")
-T(1636, 1118, "保持 30日（営業のみ14日）・無期限保持は 0 件", 13, "#7ED9A0")
-T(1636, 1144, "CloudWatch アラーム 0 件 ← 要対応", 13, "#FF9B9B")
-
-# --- 外部サービス ---
-G(2080, 408, 520, 800, "外部サービス（AWS外）", "#C8A45B", False)
-for i, (nm, sub, nid, col, ic) in enumerate([
-        ("企業微信 / WeChat", "研修のみ・API GW /wechat", "x_wecom", "#C8A45B", "user"),
-        ("Zoom API", "研修の開講リンク自動発行", "x_zoom", "#C8A45B", "user"),
-        ("駅探（ekitan）", "営業・通勤経路の取得", "x_eki", "#C8A45B", "user"),
-        ("Amazon Location geo-places", "住所→最寄駅（リソース不要）", "x_loc", C_NET, "loc"),
-        ("Amazon Bedrock", "権限のみ付与・現在 未使用", "x_br", C_ML, "bedrock"),
-        ("sons02 メール校正ツール", "人事からリンク誘導のみ", "x_mail", "#C8A45B", "user")]):
-    N(2104, 456 + i * 82, 472, 64, nm, col, sub, ic, nid=nid)
-NOTE(2104, 960, 472, 218,
-     "外部依存の扱い" + NL +
-     "・駅探＝HTML構造の変更で壊れる想定。" + NL +
-     "  データ源の差し替えを契約事項としている" + NL +
-     "・Bedrock は東京で inference-profile が必須" + NL +
-     "・企業微信の認証情報は現在 Lambda 環境変数に" + NL +
-     "  平文。SSM SecureString 化が必要（BS_INF-08 §4）" + NL +
-     "・外部到達は全て HTTPS。VPC / NAT GW は持たない")
-
-# ═══════════════ フロー ═══════════════
-BLUE, GREEN, ORANGE, PINK, GRAY = "#7FB3FF", "#5FD68A", "#FFB454", "#FF7AC8", "#7A8CA6"
-for i, key in enumerate(["shain", "soumu", "jinji", "eigyo", None, "kenshu"]):
-    if not key:
-        continue
-    E("u%d" % i, "acc_" + key, "", GRAY)
-    E("acc_" + key, "fu_" + key if key != "kenshu" else "apigw_kenshu", "", GRAY)
-E("u4", "fu_eigyo_api", "SigV4", GRAY)
-for a, b in [("fu_shain", "l_shain"), ("fu_soumu", "l_soumu"), ("fu_jinji", "l_hr"),
-             ("fu_eigyo", "l_eigyo"), ("fu_eigyo_api", "l_eigyoapi"),
-             ("apigw_kenshu", "l_kenshu")]:
-    E(a, b, "", GRAY)
-# 線上は番号のみ。内容は「処理フロー」注記に書く（線が短くても読めるようにするため）
-E("l_shain", "t_roster", "①", BLUE, t=0.55)
-E("l_shain", "s3", "②", GREEN, t=0.60)
-E("l_soumu", "t_sub", "③", BLUE, t=0.55)
-E("l_soumu", "s3", "⑥", GREEN, t=0.68)
-E("e_rem", "l_rem", "④", ORANGE, t=0.42)
-E("e_poll", "l_rem", "⑦", ORANGE, t=0.36)
-E("e_rec", "l_rec", "⑧", ORANGE, t=0.36)
-E("e_krem", "l_krem", "", ORANGE)
-E("l_rem", "t_bc", "⑤", PINK, t=0.52)
-E("l_rem", "acc_shain", "④", PINK, t=0.90)
-E("l_soumu", "l_rem", "非同期", GRAY, dash=True, t=0.5)
-E("l_rec", "t_roster", "⑧", ORANGE, t=0.62)
-E("l_eigyo", "x_loc", "", GRAY)
-E("l_eigyo", "x_eki", "", GRAY)
-E("l_kenshu", "x_zoom", "", GRAY)
-E("l_kenshu", "x_wecom", "", GRAY)
-E("l_hr", "x_mail", "", GRAY, dash=True)
-E("l_shain", "ssm", "", GRAY, dash=True)
-E("t_sess", "l_shain", "", GRAY)
-E("t_book", "l_rem", "", GRAY)
-E("l_kenshu", "t_kenshu", "", GRAY)
-E("l_eigyo", "t_eki", "", GRAY)
-
-# ═══════════════ 凡例・注記（AWS クラウド枠の下） ═══════════════
-G(40, 1240, 440, 190, "凡例（線の色）", MUTE)
-LEG = [(BLUE, "① ③ 同期リクエスト"),
-       (GREEN, "② ⑥ S3 経路"),
-       (ORANGE, "④ ⑦ ⑧ 定期実行"),
-       (PINK, "⑤ push 配信"),
-       (GRAY, "経路（実線）／非同期・参照（破線）")]
-for i, (c, s) in enumerate(LEG):
-    T(66, 1288 + i * 26, "━━", 16, c, True)
-    T(116, 1288 + i * 26, s, 14, TXT)
-
-NOTE(500, 1240, 700, 190,
-     "処理フロー（線上の番号に対応）" + NL +
-     "① 本人確認：「所属部署 お名前」→ roster 照合 → auth に当日認証（TTL＝当日限り）" + NL +
-     "② 提出：Excel / PDF / 画像 → S3 へ保存し submissions に記録" + NL +
-     "③ 回収：総務が submissions の GSI1（月×種別）を Query して提出状況を横断集計" + NL +
-     "④ 催促：EventBridge（25/28日）→ reminder →「社員チャネルの token」で push" + NL +
-     "⑤ 既読確認：社員が postback → broadcasts に確認記録（配信IDは画面に出さない）" + NL +
-     "⑥ ダウンロード：ZIP/CSV を exports/ に生成 → 署名付き短縮URL → presigned で S3 から取得" + NL +
-     "⑦ 予約催促：bookings を 10分間隔のポーラーが拾い、実行時点の未提出者のみへ送信" + NL +
-     "⑧ 日次点検：毎日0:00 に到達性を確認し、到達不可なら紐付けを解除")
-
-NOTE(1220, 1240, 560, 190,
-     "なぜ authType = NONE か" + NL +
-     "LINE Platform は Webhook に SigV4 を付けられない。" + NL +
-     "AWS_IAM にすると LINE からの全リクエストが 403 になる。" + NL +
-     "よって AWS 層は通し、アプリ層で HMAC-SHA256 の" + NL +
-     "署名検証を必ず行う（BS_INF-05 §3）。" + NL +
-     "→ チャネルシークレットの漏洩が単一障害点。" + NL +
-     "  SSM SecureString にのみ保持する。")
-
-NOTE(1810, 1240, 540, 190,
-     "所有区分（スタック依存）" + NL +
-     "・BrightstarHr-dev（人事）が roster / auth /" + NL +
-     "  employees / submissions / S3 を所有。" + NL +
-     "  他4スタックは名前で参照するだけ。" + NL +
-     "・初回デプロイは人事を最初に行う。" + NL +
-     "・人事スタックの削除は他4チャネルを巻き込む。" + NL +
-     "・各チャネルは独立スタック＝障害・改修が波及しない。")
-
-NOTE(40, 1460, 440, 290,
-     "設計の要点：VPC を使わない" + NL +
-     "接続先は全てマネージド" + NL +
-     "サービスと外部 HTTPS。" + NL +
-     "VPC に入れると ENI 生成で" + NL +
-     "コールドスタートが延び、" + NL +
-     "NAT GW の固定費も発生する。" + NL + NL +
-     "入口側の固定費はゼロ" + NL +
-     "（CloudFront / WAF / ALB /" + NL +
-     "独自ドメインを使わない）。" + NL + NL +
-     "外部ライブラリも持たない" + NL +
-     "（標準ライブラリ + boto3）。")
-
-NOTE(500, 1460, 1030, 290,
-     "早期対応を推奨する課題（BS_INF シリーズ 横断サマリ）" + NL +
-     "① CloudWatch アラームが 0 件。月2回しか動かない催促が失敗しても誰も気付かない　【高】BS_INF-09 §4" + NL +
-     "② 企業微信の認証情報が Lambda 環境変数に平文。SSM SecureString 化が必要　　　　　　【高】BS_INF-08 §4" + NL +
-     "③ 全 DynamoDB / S3 が RemovalPolicy.DESTROY。人事スタック削除で全社データ消失　　　【高】BS_INF-03 §7" + NL +
-     "④ /dl の署名に有効期限が無い（実体は exports/ が3日で消えるため露出は最大3日）　　　【中】BS_INF-04 §6" + NL +
-     "⑤ 60日超の月は Deep Archive へ移行済みで一括DLが失敗する（復元処理は未実装）　　　　【中】BS_INF-04 §5" + NL +
-     "⑥ IAM が粗い（読み取りのみの関数にも DeleteItem）。ログに氏名・社員番号が出力される　【中】BS_INF-07 / 09" + NL + NL +
-     "※ 脆弱性検査（SAST / DAST）・ペネトレーションテストは未実施。実施済みは機能面の単体・結合テストのみ。")
-
-NOTE(1560, 1460, 1040, 290,
-     "2026-09-19 に実施した是正と検証" + NL +
-     "・CloudWatch Logs の無期限保持を解消。研修 / 人事 / 総務 / 社員の全 Lambda に logRetention=30日 を追加し4スタックを再デプロイ。" + NL +
-     "  brightstar / Eki 系 19 ロググループのうち無期限保持は 0 件になった（営業のみ従来どおり14日）。" + NL +
-     "・旧スタック由来の孤立ロググループ 5 件（計 791KB・最終ログ 2026-06）を、対応する Lambda の不在を確認のうえ削除。" + NL +
-     "・デプロイ済み Lambda とリポジトリの同期を機械検証。全11関数・122ファイルの md5 が一致（差分なし）。" + NL +
-     "  検証方法＝各関数の Code.Location から配布 zip を取得・展開し、リポジトリ側とファイル単位で md5 比較。" + NL +
-     "  営業のみ build/ が .gitignore のため、build.py のコピー規則で git 管理下の元ファイルへ読み替えて突合。" + NL + NL +
-     "この図と BS_INF-01〜10 の記載値は、すべて上記時点の実機照会結果であり、設計当初の想定値ではない。")
-
-
-# ═══════════════ 出力：SVG ═══════════════
-def node_by_id(i):
-    for n in nodes:
-        if n["id"] == i:
-            return n
-    raise KeyError(i)
-
-
-def anchor(a, b):
-    ax, ay = a["x"] + a["w"] / 2, a["y"] + a["h"] / 2
-    bx, by = b["x"] + b["w"] / 2, b["y"] + b["h"] / 2
-    dx, dy = bx - ax, by - ay
-
-    def pt(n, cx, cy, dx, dy):
-        if dx == 0 and dy == 0:
-            return cx, cy
-        hw, hh = n["w"] / 2 + 4, n["h"] / 2 + 4
-        s = min(hw / abs(dx) if dx else 1e9, hh / abs(dy) if dy else 1e9)
-        return cx + dx * s, cy + dy * s
-    return pt(a, ax, ay, dx, dy), pt(b, bx, by, -dx, -dy)
+def _id(p="c"):
+    _seq[0] += 1
+    return "%s%d" % (p, _seq[0])
 
 
 def esc(s):
-    return html.escape(s, quote=True)
+    return html.escape(s or "", quote=True)
 
 
-svg = ['<svg xmlns="http://www.w3.org/2000/svg" width="%d" height="%d" viewBox="0 0 %d %d" '
-       'font-family="Meiryo, Yu Gothic, Noto Sans JP, sans-serif">' % (W, H, W, H),
-       '<rect width="%d" height="%d" fill="%s"/>' % (W, H, BG), '<defs>']
-for c in [BLUE, GREEN, ORANGE, PINK, GRAY]:
-    svg.append('<marker id="ar%s" markerWidth="9" markerHeight="9" refX="8" refY="3" orient="auto">'
-               '<path d="M0,0 L0,6 L9,3 z" fill="%s"/></marker>' % (c.lstrip("#"), c))
-svg.append('</defs>')
+def raw(s):
+    """drawio の value（html=1）に入れる文字列。
 
-for g in groups:
-    svg.append('<rect x="%d" y="%d" width="%d" height="%d" rx="12" fill="%s" stroke="%s" '
-               'stroke-width="2" %s/>'
-               % (g["x"], g["y"], g["w"], g["h"], PANEL, g["color"],
-                  'stroke-dasharray="7 5"' if g["dash"] else ""))
-    svg.append('<text x="%d" y="%d" font-size="15" font-weight="bold" fill="%s">%s</text>'
-               % (g["x"] + 14, g["y"] + 25, g["color"], esc(g["label"])))
+    属性内なので & " < > をエスケープし、改行は drawio が解釈する <br> に変換する
+    （生の改行は描画時に潰れて 1 行になる）。"""
+    return (s.replace("&", "&amp;").replace('"', "&quot;")
+             .replace("<", "&lt;").replace(">", "&gt;")
+             .replace("\n", "&lt;br&gt;"))
 
-for e in edges:
-    a, b = node_by_id(e["a"]), node_by_id(e["b"])
-    (x1, y1), (x2, y2) = anchor(a, b)
-    svg.append('<line x1="%.1f" y1="%.1f" x2="%.1f" y2="%.1f" stroke="%s" stroke-width="2.4" '
-               '%s marker-end="url(#ar%s)" opacity="0.9"/>'
-               % (x1, y1, x2, y2, e["color"],
-                  'stroke-dasharray="8 5"' if e["dash"] else "", e["color"].lstrip("#")))
-    if e["label"]:
-        tt = e["t"]
-        mx_, my_ = x1 + (x2 - x1) * tt, y1 + (y2 - y1) * tt
-        tw = len(e["label"]) * 9.2 + 16
-        svg.append('<rect x="%.1f" y="%.1f" width="%.1f" height="24" rx="7" fill="%s" '
-                   'stroke="%s" stroke-width="1.2"/>' % (mx_ - tw / 2, my_ - 12, tw, BG, e["color"]))
-        svg.append('<text x="%.1f" y="%.1f" font-size="13.5" fill="%s" text-anchor="middle">%s</text>'
-                   % (mx_, my_ + 5, e["color"], esc(e["label"])))
 
-for n in nodes:
-    svg.append('<rect x="%d" y="%d" width="%d" height="%d" rx="10" fill="%s" stroke="%s" '
-               'stroke-width="2.2"/>' % (n["x"], n["y"], n["w"], n["h"], PANEL, n["color"]))
-    svg.append('<rect x="%d" y="%d" width="10" height="%d" rx="5" fill="%s"/>'
-               % (n["x"], n["y"], n["h"], n["color"]))
-    ls = n["label"].split(NL)
-    ty = n["y"] + (24 if (len(ls) > 1 or n["sub"]) else n["h"] / 2 + 6)
-    for i, l in enumerate(ls):
-        svg.append('<text x="%d" y="%d" font-size="15" font-weight="bold" fill="%s">%s</text>'
-                   % (n["x"] + 22, ty + i * 19, TXT, esc(l)))
-    if n["sub"]:
-        sy = ty + len(ls) * 19 + 2
-        for j, sl in enumerate(n["sub"].split(NL)):
-            svg.append('<text x="%d" y="%d" font-size="12.5" fill="%s">%s</text>'
-                       % (n["x"] + 22, sy + j * 17, MUTE, esc(sl)))
+def group(x, y, w, h, label, stroke=INK, gr_icon=None, dashed=0, fill="none",
+          nid=None, parent="1", font=13):
+    nid = nid or _id("g")
+    if gr_icon:
+        style = ("points=[[0,0],[0.25,0],[0.5,0],[0.75,0],[1,0],[1,0.25],[1,0.5],[1,0.75],"
+                 "[1,1],[0.75,1],[0.5,1],[0.25,1],[0,1],[0,0.75],[0,0.5],[0,0.25]];"
+                 "outlineConnect=0;gradientColor=none;html=1;whiteSpace=wrap;fontSize=%d;"
+                 "fontStyle=1;container=1;pointerEvents=0;collapsible=0;recursiveResize=0;"
+                 "shape=mxgraph.aws4.group;grIcon=mxgraph.aws4.%s;strokeColor=%s;fillColor=%s;"
+                 "verticalAlign=top;align=left;spacingLeft=30;fontColor=%s;dashed=%d;"
+                 % (font, gr_icon, stroke, fill, stroke, dashed))
+    else:
+        style = ("rounded=1;whiteSpace=wrap;html=1;fillColor=%s;strokeColor=%s;dashed=%d;"
+                 "verticalAlign=top;align=left;spacingLeft=10;spacingTop=2;fontColor=%s;"
+                 "fontSize=%d;fontStyle=1;container=1;collapsible=0;pointerEvents=0;"
+                 % (fill, stroke, dashed, stroke, font))
+    cells.append('<mxCell id="%s" value="%s" style="%s" vertex="1" parent="%s">'
+                 '<mxGeometry x="%d" y="%d" width="%d" height="%d" as="geometry"/></mxCell>'
+                 % (nid, esc(label), style, parent, x, y, w, h))
+    return nid
 
-for nt in notes:
-    svg.append('<path d="M%d,%d h%d v%d l-18,18 h-%d z" fill="%s" stroke="#D9C97A" stroke-width="1.5"/>'
-               % (nt["x"], nt["y"], nt["w"], nt["h"] - 18, nt["w"] - 18, NOTE_BG))
-    for i, l in enumerate(nt["text"].split(NL)):
-        svg.append('<text x="%d" y="%d" font-size="13" fill="%s" %s>%s</text>'
-                   % (nt["x"] + 14, nt["y"] + 25 + i * 19, NOTE_FG,
-                      'font-weight="bold"' if i == 0 else "", esc(l)))
 
-for t in texts:
-    svg.append('<text x="%d" y="%d" font-size="%s" fill="%s" %s>%s</text>'
-               % (t["x"], t["y"], t["size"], t["color"],
-                  'font-weight="bold"' if t["bold"] else "", esc(t["s"])))
-svg.append("</svg>")
+def icon(x, y, label, res, color, nid=None, parent="1", tip="", size=78):
+    """AWS4 公式アイコン。ラベルはアイコンの下に出る。"""
+    nid = nid or _id("i")
+    style = ("sketch=0;points=[[0,0,0],[0.25,0,0],[0.5,0,0],[0.75,0,0],[1,0,0],[0,1,0],"
+             "[0.25,1,0],[0.5,1,0],[0.75,1,0],[1,1,0],[0,0.25,0],[0,0.5,0],[0,0.75,0],"
+             "[1,0.25,0],[1,0.5,0],[1,0.75,0]];outlineConnect=0;fontColor=%s;"
+             "gradientColor=none;fillColor=%s;strokeColor=none;dashed=0;"
+             "verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;"
+             "fontSize=11;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.resourceIcon;"
+             "resIcon=mxgraph.aws4.%s;" % (INK, color, res))
+    body = ('<mxCell id="%s" value="%s" style="%s" vertex="1" parent="%s">'
+            '<mxGeometry x="%d" y="%d" width="%d" height="%d" as="geometry"/></mxCell>'
+            % (nid, raw(label), style, parent, x, y, size, size))
+    if tip:
+        cells.append('<UserObject label="%s" tooltip="%s" id="%s">%s</UserObject>'
+                     % (raw(label), esc(tip), nid,
+                        body.replace(' id="%s"' % nid, "").replace('value="%s" ' % raw(label), "")))
+    else:
+        cells.append(body)
+    return nid
+
+
+def box(x, y, w, h, label, stroke, nid=None, parent="1", fill="#FFFFFF", font=12,
+        bold=1, align="center"):
+    nid = nid or _id("b")
+    cells.append('<mxCell id="%s" value="%s" style="rounded=1;whiteSpace=wrap;html=1;'
+                 'fillColor=%s;strokeColor=%s;fontColor=%s;fontSize=%d;fontStyle=%d;'
+                 'align=%s;verticalAlign=middle;" vertex="1" parent="%s">'
+                 '<mxGeometry x="%d" y="%d" width="%d" height="%d" as="geometry"/></mxCell>'
+                 % (nid, raw(label), fill, stroke, INK, font, bold, align, parent, x, y, w, h))
+    return nid
+
+
+def note(x, y, w, h, label, parent="1", font=11):
+    nid = _id("n")
+    cells.append('<mxCell id="%s" value="%s" style="shape=note;whiteSpace=wrap;html=1;size=16;'
+                 'fillColor=#FFF8D5;strokeColor=#D6C36A;fontColor=#3A3218;fontSize=%d;'
+                 'align=left;verticalAlign=top;spacingLeft=8;spacingTop=4;" vertex="1" parent="%s">'
+                 '<mxGeometry x="%d" y="%d" width="%d" height="%d" as="geometry"/></mxCell>'
+                 % (nid, raw(label), font, parent, x, y, w, h))
+    return nid
+
+
+def text(x, y, w, h, label, font=12, bold=0, color=INK, parent="1", align="left"):
+    nid = _id("t")
+    cells.append('<mxCell id="%s" value="%s" style="text;html=1;align=%s;verticalAlign=middle;'
+                 'fontSize=%d;fontStyle=%d;fontColor=%s;" vertex="1" parent="%s">'
+                 '<mxGeometry x="%d" y="%d" width="%d" height="%d" as="geometry"/></mxCell>'
+                 % (nid, raw(label), align, font, bold, color, parent, x, y, w, h))
+    return nid
+
+
+def edge(src, dst, label="", color="#5A6B7F", dashed=0, points=None,
+         exit_=None, entry=None, parent="1", font=11, width=1.5):
+    """points: [(x,y), ...]（絶対座標）。exit_/entry: (x比, y比)。"""
+    st = ("edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;"
+          "jumpStyle=arc;jumpSize=8;strokeColor=%s;strokeWidth=%s;dashed=%d;fontSize=%d;"
+          "fontColor=%s;labelBackgroundColor=#FFFFFF;endArrow=blockThin;endFill=1;"
+          % (color, width, dashed, font, color))
+    if exit_:
+        st += "exitX=%s;exitY=%s;exitDx=0;exitDy=0;exitPerimeter=0;" % exit_
+    if entry:
+        st += "entryX=%s;entryY=%s;entryDx=0;entryDy=0;entryPerimeter=0;" % entry
+    geo = '<mxGeometry relative="1" as="geometry">'
+    if points:
+        geo += "<Array as=\"points\">" + "".join(
+            '<mxPoint x="%d" y="%d"/>' % (px, py) for px, py in points) + "</Array>"
+    geo += "</mxGeometry>"
+    cells.append('<mxCell id="%s" value="%s" style="%s" edge="1" parent="%s" source="%s" '
+                 'target="%s">%s</mxCell>'
+                 % (_id("e"), raw(label), st, parent, src, dst, geo))
+
+
+# ══════════════════════════════════════════════════════════════════
+# レイアウト
+# ══════════════════════════════════════════════════════════════════
+COL = [140, 360, 580, 800, 1020, 1240]          # チャネル6列（縦一直線）
+IC = 78
+CX = [c + IC // 2 for c in COL]                 # 各列のアイコン中心X
+
+text(40, 24, 900, 24, "BrightStar 統合LINEアシスタント　インフラアーキテクチャ", 19, 1)
+text(40, 48, 1100, 20,
+     "正 = BS_INF-01〜10 設計書　／　ap-northeast-1 ・ アカウント 603319838936 ・ stage=dev", 12)
+text(40, 68, 1200, 20,
+     "実機照合 2026-09-19：Lambda 11本 ・ DynamoDB 15表 ・ S3 1本。デプロイ済みコードとリポジトリの md5 一致を確認済み",
+     12, 0, "#1B7A3E")
+
+# ── 利用者 ──────────────────────────────────────────────
+group(100, 110, 1260, 130, "利用者（社内 約100名）／ 役割は社員名簿 roster の role で判定",
+      "#5A6B7F", dashed=1, nid="g_users", font=12)
+USERS = [("一般社員", "employee", "u_shain"), ("総務", "hr / soumu", "u_soumu"),
+         ("人事", "hr", "u_jinji"), ("営業", "sales", "u_eigyo"),
+         (None, None, "u_tool"), ("講師", "teacher", "u_kenshu")]
+for i, (nm, role, nid) in enumerate(USERS):
+    if nm:
+        icon(COL[i], 140, "%s\n(%s)" % (nm, role), "users", INK, nid=nid, size=52)
+# 社内ツールは LINE を経由しない。LINE Platform 枠の外（右側）に置く
+icon(1450, 140, "社内ツール\n（機械クライアント）", "users", INK, nid="u_tool", size=52)
+
+# ── LINE Platform ──────────────────────────────────────
+group(100, 270, 1260, 110, "LINE Platform（同一 Provider ＝ userId が全チャネルで一致）",
+      "#06C755", nid="g_line", font=12)
+ACC = [("BS社員管理", "acc_shain"), ("BS総務", "acc_soumu"), ("BS人事", "acc_jinji"),
+       ("BS営業", "acc_eigyo"), (None, None), ("BS研修", "acc_kenshu")]
+for i, (nm, nid) in enumerate(ACC):
+    if nm:
+        box(COL[i] - 22, 305, 122, 52, nm + "\n公式アカウント", "#06C755", nid=nid, font=11)
+
+# ── AWS Cloud ──────────────────────────────────────────
+group(60, 410, 2000, 900, "AWS Cloud", INK, gr_icon="group_aws_cloud_alt", nid="g_aws")
+group(80, 450, 1960, 845, "ap-northeast-1", "#147EBA", gr_icon="group_region", nid="g_region")
+
+# 入口層
+box(100, 500, 1100, 44, "Lambda Function URL　authType = NONE（LINE は SigV4 を付けられないため）",
+    C_NET, nid="ep_furl", fill="#F4EEFF", font=11)
+icon(COL[5], 490, "API Gateway\nHTTP API（研修・7ルート）", "api_gateway", C_NET, nid="ep_apigw")
+
+# Lambda 層
+LAM = [("shain-webhook\n512MB / 29s", "l_shain"), ("soumu-webhook\n512MB / 29s", "l_soumu"),
+       ("hr-webhook\n256MB / 29s", "l_hr"), ("eigyo LineWebhookFn\n256MB / 300s", "l_eigyo"),
+       ("eigyo ApiFn\n256MB / 300s", "l_eigyoapi"),
+       ("kenshu webhook ×3\n1024MB / 20s", "l_kenshu")]
+for i, (nm, nid) in enumerate(LAM):
+    icon(COL[i], 620, nm, "lambda", C_COMPUTE, nid=nid)
+icon(COL[1], 800, "soumu-reminder\n催促 / 予約 / 一斉送信", "lambda", C_COMPUTE, nid="l_rem")
+icon(COL[2], 800, "hr-reconcile\n日次点検 120s", "lambda", C_COMPUTE, nid="l_rec")
+icon(COL[5], 800, "kenshu Reminder\n開講1h前", "lambda", C_COMPUTE, nid="l_krem")
+
+text(100, 556, 400, 32,
+     "Lambda：Python 3.12 / arm64（営業のみ x86_64）\n外部ライブラリなし（標準ライブラリ + boto3）",
+     10, 1, "#7A4A00")
+
+# データ層
+group(100, 970, 700, 300, "共有データ　BrightstarHr-dev が所有（他4スタックは名前で参照）",
+      C_DB, dashed=1, nid="g_shared", font=12)
+for i, (nm, nid) in enumerate([("roster\n社員名簿・PITR有", "t_roster"),
+                               ("auth\n日次認証・TTL", "t_auth"),
+                               ("employees\n紐付け・PITR有", "t_emp"),
+                               ("submissions\n提出記録・GSI1", "t_sub")]):
+    icon(130 + i * 170, 1005, nm, "dynamodb", C_DB, nid=nid)
+icon(130, 1150, "S3　提出物・テンプレート", "s3", C_STORAGE, nid="s3")
+text(228, 1152, 540, 96,
+     "brightstar-hr-dev-{account}\n"
+     "hr/{年}/{月}/{worktimes|expenses|others}　hr/template ・ pending ・ exports\n"
+     "公開遮断 / SSE-S3 / バージョニング有\n"
+     "60日 → Deep Archive　365日削除", 10)
+
+group(830, 970, 500, 300, "チャネル固有データ", C_DB, dashed=1, nid="g_own", font=12)
+for i, (nm, nid) in enumerate([("session\n社員・当日モード", "t_sess"),
+                               ("bookings\n催促予約", "t_book"),
+                               ("broadcasts\n配信・既読確認", "t_bc")]):
+    icon(860 + i * 155, 1005, nm, "dynamodb", C_DB, nid=nid)
+icon(860, 1150, "kenshu 6表", "dynamodb", C_DB, nid="t_kenshu")
+icon(1060, 1150, "EkiCommute 2表", "dynamodb", C_DB, nid="t_eki")
+text(860, 1235, 460, 30,
+     "全15表 ＝ PAY_PER_REQUEST　暗号化 ＝ AWS管理キー（CMK 不採用）", 10)
+
+# 右カラム：定期実行 / 機密 / 監視
+group(1380, 490, 300, 420, "定期実行", C_APPINT, dashed=1, nid="g_evb", font=12)
+EVB = [("reminder-schedule\n毎月25/28日 9:00 JST", "e_rem"),
+       ("booking-poller\n10分間隔", "e_poll"),
+       ("reconcile-schedule\n毎日 0:00 JST", "e_rec"),
+       ("kenshu ReminderTick\n10分間隔", "e_krem")]
+for i, (nm, nid) in enumerate(EVB):
+    icon(1420, 530 + i * 95, nm, "eventbridge", C_APPINT, nid=nid, size=56)
+
+group(1720, 490, 300, 200, "機密情報", C_SEC, dashed=1, nid="g_sec", font=12)
+icon(1760, 530, "SSM Parameter Store\nSecureString ×10", "systems_manager", C_SEC,
+     nid="ssm", size=56)
+text(1740, 622, 275, 44,
+     "全 Lambda が起動時に取得（線は省略）\n/{app}/dev/line/{secret,token} ×5チャネル", 10)
+
+group(1720, 720, 300, 190, "監視", C_MGMT, dashed=1, nid="g_mon", font=12)
+icon(1760, 758, "CloudWatch\nLogs 30日 / アラーム10", "cloudwatch_2", C_MGMT, nid="cw", size=56)
+icon(1900, 758, "SNS\nbrightstar-ops-dev-alerts", "sns", C_APPINT, nid="sns", size=56)
+
+# ── 外部サービス（AWS 外） ────────────────────────────
+group(2100, 410, 420, 900, "外部サービス（AWS 外・すべて HTTPS）", "#B8860B", dashed=1,
+      nid="g_ext", font=12)
+EXT = [("企業微信 / WeChat\n研修のみ・API GW /wechat", "x_wecom"),
+       ("Zoom API\n研修の開講リンク発行", "x_zoom"),
+       ("駅探（ekitan）\n営業・通勤経路の取得", "x_eki"),
+       ("sons02 メール校正\n人事からリンク誘導のみ", "x_mail")]
+for i, (nm, nid) in enumerate(EXT):
+    box(2130, 460 + i * 90, 360, 60, nm, "#B8860B", nid=nid, fill="#FFFBEF", font=11)
+icon(2130, 830, "Amazon Location\ngeo-places（住所→最寄駅）", "location_service", C_NET,
+     nid="x_loc", size=56)
+
+note(2130, 960, 360, 330,
+     "外部依存の扱い\n"
+     "・駅探は HTML 構造の変更で壊れる想定。\n"
+     "　データ源の差し替えを契約事項としている\n"
+     "・Bedrock は権限のみ付与・現在未使用\n"
+     "　（東京では inference-profile が必須）\n"
+     "・企業微信の認証情報は現在 Lambda 環境変数に\n"
+     "　平文。SSM SecureString 化が必要\n"
+     "　（BS_INF-08 §4）\n\n"
+     "個人情報の所在\n"
+     "氏名・社員番号・所属・勤務実績・通勤経路\n"
+     "マイナンバー / 口座 / 在留カードは扱わない\n"
+     "横断閲覧（一覧・CSV・一括DL・削除）は\n"
+     "役割 hr / soumu に限定（BS_INF-07 §3）")
+
+# ══════════════════════════════════════════════════════════════════
+# フロー（アイコンを貫通させないよう waypoint で車線を作る）
+#   車線 Y=960（Lambda とデータ層の間）、車線 X=1345（右カラムへの縦道）
+# ══════════════════════════════════════════════════════════════════
+BLUE, GREEN, ORANGE, PINK, GRAY = "#1565C0", "#2E7D32", "#E65100", "#AD1457", "#5A6B7F"
+
+# 利用者 → LINE → 入口 → Lambda（すべて真下。交差なし）
+for i, (_, _, unid) in enumerate(USERS):
+    if unid == "u_tool":
+        continue
+    a = ACC[i][1]
+    edge(unid, a, "", GRAY, exit_=("0.5", "1"), entry=("0.5", "0"))
+for i, (_, nid) in enumerate(ACC):
+    if not nid:
+        continue
+    tgt = "ep_apigw" if i == 5 else "ep_furl"
+    if i == 5:
+        edge(nid, tgt, "", GRAY, exit_=("0.5", "1"), entry=("0.5", "0"))
+    else:
+        edge(nid, tgt, "", GRAY, exit_=("0.5", "1"),
+             entry=("%.3f" % ((CX[i] - 100) / 1100.0), "0"))
+for i in range(5):
+    edge("ep_furl", LAM[i][1], "", GRAY,
+         exit_=("%.3f" % ((CX[i] - 100) / 1100.0), "1"), entry=("0.5", "0"))
+edge("ep_apigw", "l_kenshu", "", GRAY, exit_=("0.5", "1"), entry=("0.5", "0"))
+edge("u_tool", "ep_furl", "SigV4", GRAY,
+     exit_=("0.5", "1"), entry=("1", "0.5"),
+     points=[(1476, 470), (1240, 470), (1240, 522)])
+
+# ① 本人確認：shain → roster
+edge("l_shain", "t_roster", "①", BLUE, exit_=("0.5", "1"), entry=("0.5", "0"),
+     points=[(CX[0], 960), (169, 960)])
+# ② 提出：shain → S3（左の外側を通してアイコンを避ける）
+edge("l_shain", "s3", "②", GREEN, exit_=("0", "0.5"), entry=("0", "0.5"),
+     points=[(92, 659), (92, 1189)])
+# ③ 回収：soumu → submissions
+edge("l_soumu", "t_sub", "③", BLUE, exit_=("0.5", "1"), entry=("0.5", "0"),
+     points=[(CX[1], 960), (679, 960)])
+# ⑥ DL：soumu → S3
+edge("l_soumu", "s3", "⑥", GREEN, exit_=("0", "0.5"), entry=("1", "0.5"),
+     points=[(340, 659), (340, 1189)])
+# ⑤ 既読確認：reminder → broadcasts
+edge("l_rem", "t_bc", "⑤", PINK, exit_=("1", "0.5"), entry=("0.5", "0"),
+     points=[(830, 839), (830, 950), (1209, 950)])
+# ④ push は社員チャネルの token で送る（左端を大きく迂回してアイコンを避ける）
+edge("l_rem", "acc_shain", "④", PINK, exit_=("0", "0.5"), entry=("0", "0.5"),
+     points=[(70, 839), (70, 331)])
+# ④⑦⑧ EventBridge → Lambda
+#   縦道 x=1345/1355/1365、横車線 y=906/920/934（Lambda 下端878 とデータ層上端970 の間）
+edge("e_rem", "l_rem", "④", ORANGE, exit_=("0", "0.5"), entry=("0.25", "1"),
+     points=[(1345, 558), (1345, 906), (380, 906)])
+edge("e_poll", "l_rem", "⑦", ORANGE, exit_=("0", "0.5"), entry=("0.75", "1"),
+     points=[(1355, 653), (1355, 920), (418, 920)])
+edge("e_rec", "l_rec", "⑧", ORANGE, exit_=("0", "0.5"), entry=("0.5", "1"),
+     points=[(1365, 748), (1365, 934), (619, 934)])
+edge("e_krem", "l_krem", "", ORANGE, exit_=("0", "0.5"), entry=("1", "0.5"))
+# 非同期 Invoke
+edge("l_soumu", "l_rem", "非同期", GRAY, dashed=1, exit_=("0.5", "1"), entry=("0.5", "0"))
+# ⑧ 紐付け解除
+edge("l_rec", "t_roster", "⑧", ORANGE, exit_=("0.5", "1"), entry=("1", "0.5"),
+     points=[(CX[2], 945), (300, 945), (300, 1044)])
+# 参照（破線）
+# SSM は全 Lambda が起動時に読むため、線は引かず 機密情報 グループ内に注記する
+edge("l_shain", "t_sess", "", GRAY, dashed=1, exit_=("1", "0.5"), entry=("0", "0.5"),
+     points=[(240, 900), (240, 1044)])
+edge("l_rem", "t_book", "", GRAY, dashed=1, exit_=("0.5", "1"), entry=("0.5", "0"))
+edge("l_kenshu", "t_kenshu", "", GRAY, dashed=1, exit_=("0", "0.5"), entry=("1", "0.5"),
+     points=[(1340, 1189)])
+edge("l_eigyo", "t_eki", "", GRAY, dashed=1, exit_=("0.5", "1"), entry=("0.5", "0"),
+     points=[(CX[3], 1120), (1099, 1120)])
+edge("cw", "sns", "", GRAY, exit_=("1", "0.5"), entry=("0", "0.5"))
+# 外部サービス
+edge("l_kenshu", "x_wecom", "", GRAY, exit_=("1", "0.5"), entry=("0", "0.5"),
+     points=[(2060, 659), (2060, 490)])
+edge("l_kenshu", "x_zoom", "", GRAY, exit_=("1", "0.5"), entry=("0", "0.5"),
+     points=[(2050, 659), (2050, 580)])
+edge("l_eigyo", "x_eki", "", GRAY, exit_=("1", "0.5"), entry=("0", "0.5"),
+     points=[(1320, 690), (1320, 960), (2070, 960), (2070, 670)])
+edge("l_eigyo", "x_loc", "", GRAY, exit_=("1", "0.5"), entry=("0", "0.5"),
+     points=[(1330, 700), (1330, 970), (2085, 970), (2085, 858)])
+edge("l_hr", "x_mail", "", GRAY, dashed=1, exit_=("1", "0.5"), entry=("0", "0.5"),
+     points=[(1310, 680), (1310, 940), (2095, 940), (2095, 760)])
+
+# ══════════════════════════════════════════════════════════════════
+# 凡例・注記
+# ══════════════════════════════════════════════════════════════════
+group(60, 1350, 620, 180, "凡例（線の色）", "#5A6B7F", dashed=1, font=12)
+LEG = [(BLUE, "① ③ 同期リクエスト（本人確認・回収）"),
+       (GREEN, "② ⑥ S3 経路（提出・ダウンロード）"),
+       (ORANGE, "④ ⑦ ⑧ EventBridge 起動（定期実行）"),
+       (PINK, "⑤ 既読確認 ／ push 配信"),
+       (GRAY, "経路（実線）／ 非同期 Invoke・参照（破線）")]
+for i, (c, s) in enumerate(LEG):
+    text(80, 1388 + i * 28, 60, 20, "━━━", 14, 1, c)
+    text(150, 1388 + i * 28, 520, 20, s, 11)
+
+note(710, 1350, 720, 330,
+     "処理フロー（線上の番号）\n"
+     "① 本人確認：「所属部署 お名前」→ roster 照合 → auth に当日認証（TTL＝当日限り）\n"
+     "② 提出：Excel / PDF / 画像 → S3 に保存し submissions に記録\n"
+     "③ 回収：総務が submissions の GSI1（月×種別）を Query して横断集計\n"
+     "④ 催促：EventBridge（25/28日）→ reminder →「社員チャネルの token」で push\n"
+     "⑤ 既読確認：社員が postback → broadcasts に記録（配信IDは画面に出さない）\n"
+     "⑥ ダウンロード：ZIP/CSV を exports/ に生成 → 署名付き短縮URL → presigned で取得\n"
+     "⑦ 予約催促：bookings を10分間隔のポーラーが拾い、実行時点の未提出者のみへ送信\n"
+     "⑧ 日次点検：毎日0:00 に到達性を確認し、到達不可なら紐付けを解除\n\n"
+     "なぜ authType = NONE か\n"
+     "LINE Platform は Webhook に SigV4 を付けられず、AWS_IAM にすると全リクエストが403。\n"
+     "AWS 層は通し、アプリ層で HMAC-SHA256 の署名検証を必ず行う（BS_INF-05 §3）。\n"
+     "→ チャネルシークレットの漏洩が単一障害点。SSM SecureString にのみ保持する。")
+
+note(1460, 1350, 620, 330,
+     "早期対応を推奨する課題（BS_INF 横断）\n"
+     "① 企業微信の認証情報が Lambda 環境変数に平文　　　　【高】BS_INF-08 §4\n"
+     "② 全 DynamoDB / S3 が RemovalPolicy.DESTROY。\n"
+     "　 人事スタック削除で全社データ消失　　　　　　　　　【高】BS_INF-03 §7\n"
+     "③ /dl の署名に有効期限が無い（露出は最大3日）　　　　【中】BS_INF-04 §6\n"
+     "④ 60日超の月は Deep Archive で一括DLが失敗　　　　　【中】BS_INF-04 §5\n"
+     "⑤ IAM が粗い（読み取りのみの関数にも DeleteItem）　　【中】BS_INF-07 §5\n"
+     "⑥ ログに氏名・社員番号が出力される　　　　　　　　　【中】BS_INF-09 §3\n\n"
+     "※ 脆弱性検査（SAST / DAST）・ペネトレーションテストは未実施。\n"
+     "　 実施済みは機能面の単体・結合テストのみ。\n\n"
+     "対応済（2026-09-19）：ログ保持期間 30日化・孤立ロググループ5件削除・\n"
+     "CloudWatch アラーム10件と SNS 通知の新設・デプロイ同期の機械検証。")
+
+note(2100, 1350, 460, 330,
+     "所有区分（スタック依存）\n"
+     "・BrightstarHr-dev（人事）が roster / auth /\n"
+     "　employees / submissions / S3 / SNS を所有。\n"
+     "　他4スタックは名前・ARN 文字列で参照する。\n"
+     "・初回デプロイは人事を最初に実行する。\n"
+     "・人事スタックの削除は他4チャネルを巻き込む。\n"
+     "・各チャネルは独立スタック＝\n"
+     "　障害・改修が他チャネルへ波及しない。\n\n"
+     "スタック一覧\n"
+     "brightstar-kenshu-dev／BrightstarHr-dev／\n"
+     "BrightstarSoumu-dev／brightstar-shain-dev／\n"
+     "EkiCommute-dev")
+
+# ══════════════════════════════════════════════════════════════════
+xml = ('<mxfile host="app.diagrams.net" agent="brightstar-tools">'
+       '<diagram name="BrightStar インフラ" id="bs-infra">'
+       '<mxGraphModel dx="1400" dy="900" grid="1" gridSize="10" guides="1" tooltips="1" '
+       'connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="2600" '
+       'pageHeight="1700" math="0" shadow="0"><root>'
+       '<mxCell id="0"/><mxCell id="1" parent="0"/>'
+       + "".join(cells) +
+       "</root></mxGraphModel></diagram></mxfile>")
 
 os.makedirs(OUT, exist_ok=True)
-svg_path = os.path.join(OUT, "BS_インフラアーキテクチャ図.svg")
-with open(svg_path, "w", encoding="utf-8") as f:
-    f.write(NL.join(svg))
-print("SVG   :", svg_path)
+path = os.path.join(OUT, FILE)
+with open(path, "w", encoding="utf-8") as f:
+    f.write(xml)
 
-
-# ═══════════════ 出力：drawio ═══════════════
-def dstyle(color, icon):
-    return ("sketch=0;outlineConnect=0;fontColor=#FFFFFF;gradientColor=none;fillColor=%s;"
-            "strokeColor=none;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;"
-            "align=center;html=1;fontSize=11;aspect=fixed;shape=mxgraph.aws4.resourceIcon;"
-            "resIcon=%s;" % (color, RES.get(icon, RES["lambda"])))
-
-
-BR = "&lt;br&gt;"
-mx = ['<mxfile host="app.diagrams.net"><diagram name="BrightStar インフラ">',
-      '<mxGraphModel dx="1600" dy="900" grid="0" page="1" pageWidth="%d" pageHeight="%d" '
-      'background="%s" math="0" shadow="0"><root>'
-      '<mxCell id="0"/><mxCell id="1" parent="0"/>' % (W, H, BG)]
-cid = 100
-for g in groups:
-    mx.append('<mxCell id="g%d" value="%s" style="rounded=1;fillColor=%s;strokeColor=%s;dashed=%d;'
-              'verticalAlign=top;align=left;spacingLeft=10;fontColor=%s;fontSize=14;fontStyle=1;'
-              'html=1;" vertex="1" parent="1">'
-              '<mxGeometry x="%d" y="%d" width="%d" height="%d" as="geometry"/></mxCell>'
-              % (cid, esc(g["label"]), PANEL, g["color"], 1 if g["dash"] else 0, g["color"],
-                 g["x"], g["y"], g["w"], g["h"]))
-    cid += 1
-for n in nodes:
-    lbl = esc(n["label"]).replace("\n", BR)
-    if n["sub"]:
-        lbl += BR + '&lt;font color="#9FB4CE"&gt;' + esc(n["sub"]).replace("\n", BR) + '&lt;/font&gt;'
-    mx.append('<mxCell id="%s" value="%s" style="rounded=1;fillColor=%s;strokeColor=%s;'
-              'fontColor=#FFFFFF;fontSize=12;fontStyle=1;html=1;align=left;spacingLeft=52;'
-              'verticalAlign=middle;" vertex="1" parent="1">'
-              '<mxGeometry x="%d" y="%d" width="%d" height="%d" as="geometry"/></mxCell>'
-              % (n["id"], lbl, PANEL, n["color"], n["x"], n["y"], n["w"], n["h"]))
-    mx.append('<mxCell id="%s_i" value="" style="%s" vertex="1" parent="1">'
-              '<mxGeometry x="%d" y="%d" width="34" height="34" as="geometry"/></mxCell>'
-              % (n["id"], dstyle(n["color"], n["icon"]), n["x"] + 10, n["y"] + n["h"] / 2 - 17))
-for e in edges:
-    mx.append('<mxCell id="e%d" value="%s" style="edgeStyle=orthogonalEdgeStyle;rounded=1;'
-              'strokeColor=%s;strokeWidth=2;dashed=%d;fontColor=%s;fontSize=11;html=1;" '
-              'edge="1" parent="1" source="%s" target="%s">'
-              '<mxGeometry relative="1" as="geometry"/></mxCell>'
-              % (cid, esc(e["label"]), e["color"], 1 if e["dash"] else 0,
-                 e["color"], e["a"], e["b"]))
-    cid += 1
-for nt in notes:
-    mx.append('<mxCell id="nt%d" value="%s" style="shape=note;whiteSpace=wrap;html=1;size=18;'
-              'fillColor=%s;strokeColor=#D9C97A;fontColor=%s;fontSize=11;align=left;'
-              'verticalAlign=top;spacingLeft=6;spacingTop=4;" vertex="1" parent="1">'
-              '<mxGeometry x="%d" y="%d" width="%d" height="%d" as="geometry"/></mxCell>'
-              % (cid, esc(nt["text"]).replace("\n", BR), NOTE_BG, NOTE_FG,
-                 nt["x"], nt["y"], nt["w"], nt["h"]))
-    cid += 1
-for t in texts:
-    mx.append('<mxCell id="t%d" value="%s" style="text;html=1;fontColor=%s;fontSize=%s;fontStyle=%d;'
-              'align=left;verticalAlign=middle;" vertex="1" parent="1">'
-              '<mxGeometry x="%d" y="%d" width="760" height="20" as="geometry"/></mxCell>'
-              % (cid, esc(t["s"]), t["color"], t["size"], 1 if t["bold"] else 0, t["x"], t["y"] - 14))
-    cid += 1
-mx.append("</root></mxGraphModel></diagram></mxfile>")
-dio_path = os.path.join(OUT, "BS_インフラアーキテクチャ図.drawio")
-with open(dio_path, "w", encoding="utf-8") as f:
-    f.write(NL.join(mx))
-print("drawio:", dio_path)
-
-hp = os.path.join(OUT, "_render.html")
-with open(hp, "w", encoding="utf-8") as f:
-    f.write('<html><head><meta charset="utf-8"><style>html,body{margin:0;background:%s}</style>'
-            '</head><body>%s</body></html>' % (BG, open(svg_path, encoding="utf-8").read()))
-print("html  :", hp)
+import xml.etree.ElementTree as ET
+ET.fromstring(xml)
+print("drawio OK :", os.path.abspath(path))
+print("cells     :", len(cells))

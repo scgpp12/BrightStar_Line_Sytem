@@ -6,6 +6,9 @@ import * as s3 from "aws-cdk-lib/aws-s3";
 import * as s3deploy from "aws-cdk-lib/aws-s3-deployment";
 import * as lambda from "aws-cdk-lib/aws-lambda";
 import * as logs from "aws-cdk-lib/aws-logs";
+import * as sns from "aws-cdk-lib/aws-sns";
+import * as cloudwatch from "aws-cdk-lib/aws-cloudwatch";
+import * as cwActions from "aws-cdk-lib/aws-cloudwatch-actions";
 import * as iam from "aws-cdk-lib/aws-iam";
 import * as events from "aws-cdk-lib/aws-events";
 import * as targets from "aws-cdk-lib/aws-events-targets";
@@ -240,7 +243,50 @@ export class BrightstarHrStack extends cdk.Stack {
       ],
     });
 
+    // ---------------- 障害通知（SNS）＋アラーム ----------------
+    // トピックは人事スタックが所有し、他スタックは ARN 文字列で参照する
+    // （共有テーブルと同じ「名前参照」方式。Export/Import による依存を作らない）
+    const alertTopic = new sns.Topic(this, "AlertTopic", {
+      topicName: `brightstar-ops-${stage}-alerts`,
+      displayName: "BrightStar 障害通知",
+    });
+
+    const alarm = (
+      id: string, name: string, metric: cloudwatch.Metric,
+      threshold: number, evalPeriods: number, desc: string,
+      cmp: cloudwatch.ComparisonOperator = cloudwatch.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
+      missing: cloudwatch.TreatMissingData = cloudwatch.TreatMissingData.NOT_BREACHING,
+    ) => {
+      const a = new cloudwatch.Alarm(this, id, {
+        alarmName: name,
+        alarmDescription: desc,
+        metric,
+        threshold,
+        evaluationPeriods: evalPeriods,
+        comparisonOperator: cmp,
+        treatMissingData: missing,
+      });
+      a.addAlarmAction(new cwActions.SnsAction(alertTopic));
+      return a;
+    };
+
+    alarm("ReconcileErrorAlarm", `${prefix}-reconcile-errors`,
+      reconcileFn.metricErrors({ period: cdk.Duration.hours(1) }), 1, 1,
+      "日次リコンサイルが失敗。LINE紐付けの到達性点検が止まっている");
+
+    alarm("HrWebhookErrorAlarm", `${prefix}-webhook-errors`,
+      webhookFn.metricErrors({ period: cdk.Duration.minutes(5) }), 5, 1,
+      "人事チャネルの webhook が継続的にエラー");
+
+    alarm("HrWebhookThrottleAlarm", `${prefix}-webhook-throttles`,
+      webhookFn.metricThrottles({ period: cdk.Duration.minutes(5) }), 1, 1,
+      "人事チャネルの webhook が同時実行数上限に到達");
+
     // ---------------- 输出 ----------------
+    new cdk.CfnOutput(this, "AlertTopicArn", {
+      value: alertTopic.topicArn,
+      description: "障害通知の SNS トピック。購読は aws sns subscribe で別途登録する",
+    });
     new cdk.CfnOutput(this, "LineWebhookUrl", {
       value: fnUrl.url,
       description: "填到 LINE Developers > Messaging API > Webhook URL（末尾不要多斜杠）",

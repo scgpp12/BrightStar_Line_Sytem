@@ -8,6 +8,9 @@ import * as logs from "aws-cdk-lib/aws-logs";
 import * as iam from "aws-cdk-lib/aws-iam";
 import * as events from "aws-cdk-lib/aws-events";
 import * as targets from "aws-cdk-lib/aws-events-targets";
+import * as sns from "aws-cdk-lib/aws-sns";
+import * as cloudwatch from "aws-cdk-lib/aws-cloudwatch";
+import * as cwActions from "aws-cdk-lib/aws-cloudwatch-actions";
 
 export interface BrightstarSoumuStackProps extends cdk.StackProps {
   stage: string;
@@ -190,6 +193,60 @@ export class BrightstarSoumuStack extends cdk.Stack {
         }),
       ],
     });
+
+    // ---------------- アラーム ----------------
+    // 通知先トピックは人事スタックが所有。ARN 文字列で参照する（依存を作らない）
+    const alertTopic = sns.Topic.fromTopicArn(
+      this, "AlertTopic",
+      `arn:aws:sns:${this.region}:${this.account}:brightstar-ops-${stage}-alerts`);
+
+    const alarm = (
+      id: string, name: string, metric: cloudwatch.Metric,
+      threshold: number, evalPeriods: number, desc: string,
+      cmp: cloudwatch.ComparisonOperator = cloudwatch.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
+      missing: cloudwatch.TreatMissingData = cloudwatch.TreatMissingData.NOT_BREACHING,
+    ) => {
+      const a = new cloudwatch.Alarm(this, id, {
+        alarmName: name, alarmDescription: desc, metric, threshold,
+        evaluationPeriods: evalPeriods, comparisonOperator: cmp, treatMissingData: missing,
+      });
+      a.addAlarmAction(new cwActions.SnsAction(alertTopic));
+      return a;
+    };
+
+    // 最優先：催促が送れていない＝業務が止まる
+    alarm("ReminderErrorAlarm", `${appName}-${stage}-reminder-errors`,
+      reminderFn.metricErrors({ period: cdk.Duration.minutes(5) }), 1, 1,
+      "催促/予約催促/一斉送信の送信処理が失敗");
+
+    alarm("SoumuWebhookErrorAlarm", `${appName}-${stage}-webhook-errors`,
+      webhookFn.metricErrors({ period: cdk.Duration.minutes(5) }), 5, 1,
+      "総務チャネルの webhook が継続的にエラー");
+
+    alarm("SoumuWebhookThrottleAlarm", `${appName}-${stage}-webhook-throttles`,
+      webhookFn.metricThrottles({ period: cdk.Duration.minutes(5) }), 1, 1,
+      "総務チャネルの webhook が同時実行数上限に到達");
+
+    // 定時催促のルールが「起動に失敗」した場合の検知
+    alarm("ReminderRuleFailedAlarm", `${appName}-${stage}-reminder-rule-failed`,
+      new cloudwatch.Metric({
+        namespace: "AWS/Events", metricName: "FailedInvocations",
+        dimensionsMap: { RuleName: `${appName}-${stage}-reminder-schedule` },
+        statistic: "Sum", period: cdk.Duration.hours(1),
+      }), 1, 1, "定時催促のEventBridgeルールがLambda起動に失敗");
+
+    // 生存確認：10分間隔のポーラーが2時間動いていない＝定期実行系そのものが停止
+    // （月2回しか動かない催促は「動かなかったこと」を直接は検知できないため、
+    //   同じ EventBridge を使う高頻度ルールをカナリアにする）
+    alarm("SchedulerDeadAlarm", `${appName}-${stage}-scheduler-dead`,
+      new cloudwatch.Metric({
+        namespace: "AWS/Events", metricName: "Invocations",
+        dimensionsMap: { RuleName: `${appName}-${stage}-booking-poller` },
+        statistic: "Sum", period: cdk.Duration.hours(1),
+      }), 1, 2,
+      "定期実行が2時間停止（EventBridgeルール無効化・削除等）。月次の自動催促も動かない",
+      cloudwatch.ComparisonOperator.LESS_THAN_THRESHOLD,
+      cloudwatch.TreatMissingData.BREACHING);
 
     // ---------------- 输出 ----------------
     new cdk.CfnOutput(this, "LineWebhookUrl", {
